@@ -66,7 +66,7 @@ jobs:
   publish:
     uses: max-network/.github/.github/workflows/publish-package.yml@main
     with:
-      check-command: "npm run check"
+      check-steps: "check"
       tag-release: true
     secrets:
       packages-token: ${{ secrets.GH_PACKAGES_TOKEN }}
