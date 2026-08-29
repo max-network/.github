@@ -68,8 +68,7 @@ jobs:
     with:
       check-steps: "check"
       tag-release: true
-    secrets:
-      packages-token: ${{ secrets.GH_PACKAGES_TOKEN }}
+    secrets: inherit
 ```
 
 `.github/workflows/auto-pr.yml`:
@@ -86,6 +85,18 @@ jobs:
       head-branch: develop
     secrets: inherit
 ```
+
+## Gotchas these workflows already paid for
+
+- **No expressions in `permissions:`.** `contents: ${{ inputs.x && 'write' || 'read' }}` fails at
+  startup with no job, no log, and only "this run likely failed because of a workflow file
+  issue". Scope the elevated permission to its own job instead.
+- **Secret names cannot contain hyphens.** A `workflow_call` secret named `packages-token`
+  parses in an expression as `secrets.packages` *minus* `token`, because `-` is subtraction.
+  The value silently becomes garbage and npm returns 401. Callers use `secrets: inherit` and
+  the workflow reads `GH_PACKAGES_TOKEN` directly.
+- **A workflow that only triggers on push to `main` is not exercised by the PR that adds it.**
+  Dispatch it manually against a branch before wiring repos to it.
 
 ## Releasing a package
 

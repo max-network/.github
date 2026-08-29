@@ -12,10 +12,15 @@ name: Publish package
 #     unpublished until someone noticed and cut a release by hand"). The fix was applied four
 #     times by copy-paste and three repos were missed.
 #
-# The auth also drifted: some repos push with the org PAT, and mcp-oauth's comment records a
-# v0.7.0 release 401'ing on `GH_PACKAGES_TOKEN` because that repo secret is not set there.
-# This workflow falls back to the workflow token, which can publish an EXISTING package.
-# Creating a brand-new org-scoped package still needs the PAT, so pass it where it exists.
+# The auth also drifted: some repos push with the org PAT, others with the workflow token.
+# Callers pass `secrets: inherit`, and this reads GH_PACKAGES_TOKEN directly, falling back to
+# the workflow token where that secret is absent. The workflow token can publish an EXISTING
+# package; CREATING a brand-new org-scoped package needs the PAT.
+#
+# The secret is NOT declared as a named `workflow_call` input. It was, as `packages-token`,
+# and that silently broke every publish: GitHub secret names cannot contain hyphens, and in an
+# expression `secrets.packages-token` parses as `secrets.packages` MINUS `token` -- subtraction,
+# not a name. NODE_AUTH_TOKEN got garbage and npm returned 401. Nothing warns you.
 #
 # RELEASING = BUMPING THE VERSION IN YOUR PR. A merge whose version is already on the
 # registry publishes nothing and says so in the run summary, so a docs- or CI-only merge is a
@@ -40,10 +45,6 @@ on:
         description: "Push a `v<version>` tag at the published commit, so a registry version stays traceable to a commit."
         type: boolean
         default: false
-    secrets:
-      packages-token:
-        description: "Org PAT with write:packages. Required only to CREATE a package that does not exist yet."
-        required: false
 
 permissions:
   contents: read
@@ -84,12 +85,12 @@ jobs:
       # tarball ships dist/ per package.json "files", so consumers need no build step.
       - run: npm ci
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.packages-token || github.token }}
+          NODE_AUTH_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN || github.token }}
 
       - name: Is this version already published?
         id: probe
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.packages-token || github.token }}
+          NODE_AUTH_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN || github.token }}
         run: |
           NAME=$(node -p "require('./package.json').name")
           VERSION=$(node -p "require('./package.json').version")
@@ -106,7 +107,7 @@ jobs:
         if: steps.probe.outputs.published == 'false'
         run: npm publish
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.packages-token || github.token }}
+          NODE_AUTH_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN || github.token }}
 
   # A SEPARATE job purely so `contents: write` is static. GitHub Actions does not allow an
   # expression in `permissions:`, and a workflow that tries one fails at STARTUP with no
