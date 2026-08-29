@@ -94,6 +94,11 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ github.token }}
 
+      # Distinguishes "not published yet" from "could not ask". `npm view` returning
+      # non-zero was previously treated as not-published, so ANY registry error -- no read
+      # access, network, outage -- turned into an attempt to publish, which then failed with
+      # a write error that said nothing about the real cause. Only a genuine 404 means the
+      # version is absent; anything else stops the run and prints what npm actually said.
       - name: Is this version already published?
         id: probe
         env:
@@ -102,12 +107,23 @@ jobs:
           NAME=$(node -p "require('./package.json').name")
           VERSION=$(node -p "require('./package.json').version")
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          if npm view "$NAME@$VERSION" version >/dev/null 2>&1; then
+
+          set +e
+          OUT=$(npm view "$NAME@$VERSION" version 2>&1)
+          CODE=$?
+          set -e
+
+          if [ "$CODE" -eq 0 ]; then
             echo "published=true" >> "$GITHUB_OUTPUT"
             echo "\`$NAME@$VERSION\` is already on the registry — nothing to publish. Bump the version in package.json to cut a release." >> "$GITHUB_STEP_SUMMARY"
-          else
+          elif printf '%s' "$OUT" | grep -q "E404"; then
             echo "published=false" >> "$GITHUB_OUTPUT"
             echo "Publishing \`$NAME@$VERSION\`." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::error::Could not query the registry for $NAME@$VERSION, so whether it needs publishing is unknown. Refusing to guess."
+            echo "$OUT"
+            echo "Could not query the registry for \`$NAME@$VERSION\`. If this is a 403, grant this repository write access to the package under Package settings -> Manage Actions access." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
           fi
 
       - name: Publish
