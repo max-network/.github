@@ -97,10 +97,12 @@ jobs:
   the workflow reads `GH_PACKAGES_TOKEN` directly.
 - **A workflow that only triggers on push to `main` is not exercised by the PR that adds it.**
   Dispatch it manually against a branch before wiring repos to it.
-- **`GH_PACKAGES_TOKEN` is expired.** A run confirmed the secret is present (length 40) and npm
-  still returned 401. These workflows publish with the per-run workflow token instead, which
-  needs no rotation and can publish a new version of an existing package. Creating a brand-new
-  org-scoped package still needs a valid PAT; do that first publish from a laptop.
+- **Neither publish credential works everywhere.** `mcp-oauth` publishes only with
+  `GH_PACKAGES_TOKEN`: GitHub Packages' npm registry takes a classic PAT, and that repo's
+  workflow token 403s on both `read_package` and `write_package`. `worker-utils` is the
+  mirror image, with an expired PAT that 401s and a workflow token that publishes fine.
+  `publish-package.yml` therefore tries the PAT first, falls back to the workflow token, and
+  uses whichever the registry actually answers.
 
 ## Releasing a package
 

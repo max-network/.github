@@ -12,17 +12,19 @@ name: Publish package
 #     unpublished until someone noticed and cut a release by hand"). The fix was applied four
 #     times by copy-paste and three repos were missed.
 #
-# AUTH: the per-run workflow token, not the org PAT.
+# AUTH: whichever credential the registry ACCEPTS, decided per run rather than hardcoded.
 #
-# GH_PACKAGES_TOKEN is present in these repos and npm rejects it -- verified: the run reports
-# "GH_PACKAGES_TOKEN (length 40)" and npm still answers 401, so the PAT is expired or revoked
-# rather than missing. It also has to be rotated by hand and silently breaks every publish in
-# the org when it lapses, which is what happened here.
+# Neither candidate works everywhere, which is why this is not a constant:
 #
-# The workflow token is minted per run, needs no rotation, and can publish a NEW VERSION of an
-# EXISTING package, which is every release these repos make. The one thing it cannot do is
-# CREATE an org-scoped package that does not exist yet; for that first publish, publish once
-# from a laptop with a valid PAT, then every later version goes through here.
+#   - mcp-oauth publishes ONLY with GH_PACKAGES_TOKEN. GitHub Packages' npm registry accepts
+#     a classic PAT, and that repo's workflow token 403s with permission_denied on both
+#     read_package and write_package.
+#   - worker-utils is the mirror image: its GH_PACKAGES_TOKEN 401s (expired), while its
+#     workflow token publishes fine. 0.10.0 shipped that way.
+#
+# So the PAT is tried first, the workflow token second, and the first one the registry
+# answers is used. A per-repo input would work too, and would reintroduce exactly the drift
+# these shared workflows exist to remove.
 #
 # The secret is NOT declared as a named `workflow_call` input. It was, as `packages-token`,
 # and that silently broke every publish: GitHub secret names cannot contain hyphens, and in an
@@ -50,6 +52,10 @@ on:
         default: "typecheck test build"
       tag-release:
         description: "Push a `v<version>` tag at the published commit, so a registry version stays traceable to a commit."
+        type: boolean
+        default: false
+      create-release:
+        description: "Also cut a GitHub Release for that tag, for repos whose history already has them."
         type: boolean
         default: false
 
@@ -99,43 +105,73 @@ jobs:
       # access, network, outage -- turned into an attempt to publish, which then failed with
       # a write error that said nothing about the real cause. Only a genuine 404 means the
       # version is absent; anything else stops the run and prints what npm actually said.
-      - name: Is this version already published?
+      # Picks whichever credential the registry actually ACCEPTS for this package, instead
+      # of hardcoding one. Both candidates are real in this org: mcp-oauth's
+      # GH_PACKAGES_TOKEN is a valid write:packages PAT, while worker-utils' is expired and
+      # 401s. Hardcoding either one breaks the other repo, and a per-repo input would just
+      # reintroduce the drift these shared workflows exist to remove.
+      #
+      # A candidate is accepted when the registry gives it an ANSWER -- success, or a 404
+      # meaning the package is simply not there yet. 401/403 means the credential is not
+      # good for this package, so we move on.
+      - name: Publish if the version is new
         id: probe
         env:
-          NODE_AUTH_TOKEN: ${{ github.token }}
+          PAT: ${{ secrets.GH_PACKAGES_TOKEN }}
+          WORKFLOW_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
           NAME=$(node -p "require('./package.json').name")
           VERSION=$(node -p "require('./package.json').version")
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
+          probe_with() {
+            NODE_AUTH_TOKEN="$1" npm view "$NAME" version 2>&1 || true
+          }
+
+          TOKEN=""
+          for label in GH_PACKAGES_TOKEN "workflow token"; do
+            case "$label" in
+              GH_PACKAGES_TOKEN) candidate="${PAT:-}" ;;
+              *)                 candidate="$WORKFLOW_TOKEN" ;;
+            esac
+            [ -n "$candidate" ] || continue
+
+            OUT=$(probe_with "$candidate")
+            if ! printf '%s' "$OUT" | grep -qE "E401|E403|code E4[01]"; then
+              TOKEN="$candidate"
+              echo "npm auth: $label"
+              break
+            fi
+            echo "npm auth: $label rejected by the registry, trying the next credential"
+          done
+
+          if [ -z "$TOKEN" ]; then
+            echo "::error::No credential could read $NAME. GH_PACKAGES_TOKEN was rejected or absent, and the workflow token lacks access to this package. Grant this repository access under Package settings -> Manage Actions access, or refresh GH_PACKAGES_TOKEN."
+            exit 1
+          fi
+
+          # Only a genuine 404 means this VERSION is absent. Any other error means the
+          # question could not be answered, and guessing would publish over a real failure.
           set +e
-          OUT=$(npm view "$NAME@$VERSION" version 2>&1)
+          OUT=$(NODE_AUTH_TOKEN="$TOKEN" npm view "$NAME@$VERSION" version 2>&1)
           CODE=$?
           set -e
 
           if [ "$CODE" -eq 0 ]; then
             echo "published=true" >> "$GITHUB_OUTPUT"
             echo "\`$NAME@$VERSION\` is already on the registry — nothing to publish. Bump the version in package.json to cut a release." >> "$GITHUB_STEP_SUMMARY"
-          elif printf '%s' "$OUT" | grep -q "E404"; then
-            echo "published=false" >> "$GITHUB_OUTPUT"
-            echo "Publishing \`$NAME@$VERSION\`." >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "::error::Could not query the registry for $NAME@$VERSION, so whether it needs publishing is unknown. Refusing to guess."
+            exit 0
+          elif ! printf '%s' "$OUT" | grep -q "E404"; then
+            echo "::error::Could not determine whether $NAME@$VERSION is published. Refusing to guess."
             echo "$OUT"
-            echo "Could not query the registry for \`$NAME@$VERSION\`. If this is a 403, grant this repository write access to the package under Package settings -> Manage Actions access." >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
 
-      - name: Publish
-        if: steps.probe.outputs.published == 'false'
-        run: npm publish
-        env:
-          NODE_AUTH_TOKEN: ${{ github.token }}
+          echo "published=false" >> "$GITHUB_OUTPUT"
+          echo "Publishing \`$NAME@$VERSION\`." >> "$GITHUB_STEP_SUMMARY"
+          NODE_AUTH_TOKEN="$TOKEN" npm publish
 
-  # A SEPARATE job purely so `contents: write` is static. GitHub Actions does not allow an
-  # expression in `permissions:`, and a workflow that tries one fails at STARTUP with no
-  # job and no log -- which is how the first version of this file broke billing,
-  # text-search and i18n the moment they merged. Least privilege is kept by scoping the
   # write to this job rather than widening the publish job.
   tag:
     needs: publish
@@ -152,12 +188,19 @@ jobs:
       - name: Tag the release
         env:
           VERSION: ${{ needs.publish.outputs.version }}
+          GH_TOKEN: ${{ github.token }}
+          CREATE_RELEASE: ${{ inputs.create-release }}
         run: |
-          if git rev-parse "v$VERSION" >/dev/null 2>&1; then
-            echo "Tag v$VERSION already exists — leaving it alone." >> "$GITHUB_STEP_SUMMARY"
+          set -euo pipefail
+          TAG="v$VERSION"
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists — leaving it alone." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
           git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag "v$VERSION"
-          git push origin "v$VERSION"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag "$TAG"
+          git push origin "$TAG"
+          if [ "$CREATE_RELEASE" = "true" ]; then
+            gh release create "$TAG" --title "$TAG" --generate-notes
+          fi
