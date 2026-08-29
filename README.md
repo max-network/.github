@@ -97,6 +97,10 @@ jobs:
   the workflow reads `GH_PACKAGES_TOKEN` directly.
 - **A workflow that only triggers on push to `main` is not exercised by the PR that adds it.**
   Dispatch it manually against a branch before wiring repos to it.
+- **`GH_PACKAGES_TOKEN` is expired.** A run confirmed the secret is present (length 40) and npm
+  still returned 401. These workflows publish with the per-run workflow token instead, which
+  needs no rotation and can publish a new version of an existing package. Creating a brand-new
+  org-scoped package still needs a valid PAT; do that first publish from a laptop.
 
 ## Releasing a package
 
