@@ -87,6 +87,19 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN || github.token }}
 
+      # Reports WHICH credential is in play (never the value). A 401 from npm looks the
+      # same whether the PAT is absent, expired, or simply not reaching the step, and that
+      # ambiguity cost a full debugging cycle.
+      - name: Auth source
+        env:
+          PAT: ${{ secrets.GH_PACKAGES_TOKEN }}
+        run: |
+          if [ -n "$PAT" ]; then
+            echo "npm auth: GH_PACKAGES_TOKEN (length ${#PAT})"
+          else
+            echo "npm auth: workflow token (GH_PACKAGES_TOKEN empty or not inherited)"
+          fi
+
       - name: Is this version already published?
         id: probe
         env:
