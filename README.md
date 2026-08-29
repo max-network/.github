@@ -26,23 +26,23 @@ One definition means one place to fix each of those.
 | Workflow | Purpose |
 | --- | --- |
 | `publish-package.yml` | Build, gate and publish an `@max-network` package to GitHub Packages. Skips cleanly when the version is already on the registry. |
-| `node-checks.yml` | The PR quality gate. Called directly on `pull_request` and reused by a repo's publish workflow so both run the identical suite. |
+| `check.yml` | The PR quality gate. Called directly on `pull_request` and reused by a repo's publish workflow so both run the identical suite. |
 | `auto-pr.yml` | Keeps a standing promotion PR open from the staging branch to `main`. |
 
 ## Using them
 
 A package repo needs three small caller files.
 
-`.github/workflows/checks.yml`:
+`.github/workflows/check.yml`:
 
 ```yaml
-name: Checks
+name: Check
 on:
   pull_request:
   workflow_call:
 jobs:
   check:
-    uses: max-network/.github/.github/workflows/node-checks.yml@main
+    uses: max-network/.github/.github/workflows/check.yml@main
     with:
       steps: "typecheck test build"
     secrets: inherit

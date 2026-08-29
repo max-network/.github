@@ -1,4 +1,4 @@
-name: Node checks
+name: Check
 
 # The quality gate for every @max-network Node package, defined ONCE and used twice:
 #   - on every pull request in the calling repo;
