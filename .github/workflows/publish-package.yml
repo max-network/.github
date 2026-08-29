@@ -64,10 +64,12 @@ jobs:
   publish:
     needs: check
     runs-on: ubuntu-latest
-    # `tag-release` needs to push a tag back to the repo.
     permissions:
-      contents: ${{ inputs.tag-release && 'write' || 'read' }}
+      contents: read
       packages: write
+    outputs:
+      version: ${{ steps.probe.outputs.version }}
+      published: ${{ steps.probe.outputs.published }}
     steps:
       - uses: actions/checkout@v4
 
@@ -81,18 +83,16 @@ jobs:
       # Installs devDeps and runs `prepare` (the tsc build) so dist/ is fresh; the published
       # tarball ships dist/ per package.json "files", so consumers need no build step.
       - run: npm ci
-
-      - name: Quality gate
-        run: ${{ inputs.check-command }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.packages-token || github.token }}
 
       - name: Is this version already published?
-        id: check
+        id: probe
         env:
           NODE_AUTH_TOKEN: ${{ secrets.packages-token || github.token }}
         run: |
           NAME=$(node -p "require('./package.json').name")
           VERSION=$(node -p "require('./package.json').version")
-          echo "name=$NAME" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           if npm view "$NAME@$VERSION" version >/dev/null 2>&1; then
             echo "published=true" >> "$GITHUB_OUTPUT"
@@ -103,18 +103,31 @@ jobs:
           fi
 
       - name: Publish
-        if: steps.check.outputs.published == 'false'
+        if: steps.probe.outputs.published == 'false'
         run: npm publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.packages-token || github.token }}
+
+  # A SEPARATE job purely so `contents: write` is static. GitHub Actions does not allow an
+  # expression in `permissions:`, and a workflow that tries one fails at STARTUP with no
+  # job and no log -- which is how the first version of this file broke billing,
+  # text-search and i18n the moment they merged. Least privilege is kept by scoping the
+  # write to this job rather than widening the publish job.
+  tag:
+    needs: publish
+    if: inputs.tag-release && needs.publish.outputs.published == 'false'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
 
       # Skipped when the tag already exists, which is the case when this run was itself
       # triggered by pushing that tag. A tag pushed with the workflow token does not
       # re-trigger workflows, so this cannot loop.
       - name: Tag the release
-        if: inputs.tag-release && steps.check.outputs.published == 'false'
         env:
-          VERSION: ${{ steps.check.outputs.version }}
+          VERSION: ${{ needs.publish.outputs.version }}
         run: |
           if git rev-parse "v$VERSION" >/dev/null 2>&1; then
             echo "Tag v$VERSION already exists — leaving it alone." >> "$GITHUB_STEP_SUMMARY"
