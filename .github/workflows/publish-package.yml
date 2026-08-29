@@ -1,0 +1,113 @@
+name: Publish package
+
+# The ONE publish pipeline for every @max-network npm package.
+#
+# Each package repo used to carry its own copy of this file. They drifted, and not only in
+# wording — the TRIGGER itself diverged, which is a behaviour difference that silently stops
+# releases:
+#
+#   - worker-utils, billing, text-search, i18n publish on a merge to `main`.
+#   - hono-ui, mcp-oauth, hono-cms-core published ONLY from a GitHub Release, which is the
+#     exact bug the other four repos' own comments describe having fixed ("0.8.0 sat on main
+#     unpublished until someone noticed and cut a release by hand"). The fix was applied four
+#     times by copy-paste and three repos were missed.
+#
+# The auth also drifted: some repos push with the org PAT, and mcp-oauth's comment records a
+# v0.7.0 release 401'ing on `GH_PACKAGES_TOKEN` because that repo secret is not set there.
+# This workflow falls back to the workflow token, which can publish an EXISTING package.
+# Creating a brand-new org-scoped package still needs the PAT, so pass it where it exists.
+#
+# RELEASING = BUMPING THE VERSION IN YOUR PR. A merge whose version is already on the
+# registry publishes nothing and says so in the run summary, so a docs- or CI-only merge is a
+# safe no-op rather than a red build.
+
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        description: "Node major to build and publish with."
+        type: string
+        default: "22"
+      check-command:
+        description: >-
+          The quality gate, run before publishing. Publishing a package that does not
+          typecheck is worse than publishing late: every consumer installs from a semver
+          range, so a broken release reaches them on their next install.
+        type: string
+        default: "npm run check"
+      tag-release:
+        description: "Push a `v<version>` tag at the published commit, so a registry version stays traceable to a commit."
+        type: boolean
+        default: false
+    secrets:
+      packages-token:
+        description: "Org PAT with write:packages. Required only to CREATE a package that does not exist yet."
+        required: false
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    # `tag-release` needs to push a tag back to the repo.
+    permissions:
+      contents: ${{ inputs.tag-release && 'write' || 'read' }}
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          registry-url: https://npm.pkg.github.com
+          scope: "@max-network"
+          cache: npm
+
+      # Installs devDeps and runs `prepare` (the tsc build) so dist/ is fresh; the published
+      # tarball ships dist/ per package.json "files", so consumers need no build step.
+      - run: npm ci
+
+      - name: Quality gate
+        run: ${{ inputs.check-command }}
+
+      - name: Is this version already published?
+        id: check
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.packages-token || github.token }}
+        run: |
+          NAME=$(node -p "require('./package.json').name")
+          VERSION=$(node -p "require('./package.json').version")
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          if npm view "$NAME@$VERSION" version >/dev/null 2>&1; then
+            echo "published=true" >> "$GITHUB_OUTPUT"
+            echo "\`$NAME@$VERSION\` is already on the registry — nothing to publish. Bump the version in package.json to cut a release." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "published=false" >> "$GITHUB_OUTPUT"
+            echo "Publishing \`$NAME@$VERSION\`." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Publish
+        if: steps.check.outputs.published == 'false'
+        run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.packages-token || github.token }}
+
+      # Skipped when the tag already exists, which is the case when this run was itself
+      # triggered by pushing that tag. A tag pushed with the workflow token does not
+      # re-trigger workflows, so this cannot loop.
+      - name: Tag the release
+        if: inputs.tag-release && steps.check.outputs.published == 'false'
+        env:
+          VERSION: ${{ steps.check.outputs.version }}
+        run: |
+          if git rev-parse "v$VERSION" >/dev/null 2>&1; then
+            echo "Tag v$VERSION already exists — leaving it alone." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "v$VERSION"
+          git push origin "v$VERSION"

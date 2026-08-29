@@ -1,0 +1,68 @@
+name: Node checks
+
+# The quality gate for every @max-network Node package, defined ONCE and used twice:
+#   - on every pull request in the calling repo;
+#   - by that repo's publish workflow, so a release runs exactly the same suite rather
+#     than a second copy of these steps that drifts from this one.
+#
+# Each repo previously carried its own checks.yml. Those copies already described
+# themselves as mirrors of one another ("Deliberately a reusable workflow rather than a
+# file to copy, matching Max-Health-Inc/shared-ui's checks.yml"), which is the right
+# instinct pointed at the wrong target: a mirror still drifts. This is the shared original.
+#
+# npm, not bun: these repos have a package-lock.json and publish with `npm ci`, so the gate
+# installs the same way the release does.
+
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        description: "Node major to run the gate on."
+        type: string
+        default: "22"
+      steps:
+        description: >-
+          Space-separated npm scripts to run in order. The default matches the repos that
+          define all three. A repo with a single `check` script can pass "check".
+        type: string
+        default: "typecheck test build"
+      timeout-minutes:
+        description: "Fail the gate rather than hang a runner."
+        type: number
+        default: 10
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  check:
+    name: ${{ inputs.steps }}
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          registry-url: https://npm.pkg.github.com
+          scope: "@max-network"
+          cache: npm
+
+      # `npm ci` runs `prepare` (the tsc build), so dist/ is fresh for a build assertion.
+      # NODE_AUTH_TOKEN is needed because these packages depend on each other from the
+      # private GitHub Packages registry.
+      - name: Install dependencies
+        run: npm ci
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run gate
+        run: |
+          for s in ${{ inputs.steps }}; do
+            echo "::group::npm run $s"
+            npm run "$s"
+            echo "::endgroup::"
+          done
