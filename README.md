@@ -93,6 +93,12 @@ jobs:
 - **No expressions in `permissions:`.** `contents: ${{ inputs.x && 'write' || 'read' }}` fails
   at startup with no job, no log, and only "this run likely failed because of a workflow
   file issue". Scope the elevated permission to its own job instead.
+- **`A && B || C` is not a ternary.** It returns `C` whenever `B` is *falsy*, and an empty
+  string is falsy. `cache: ${{ inputs.runtime == 'bun' && '' || 'npm' }}` therefore always
+  selected `npm`, and `${{ x && secrets.MAYBE_UNSET || secrets.OTHER }}` silently selects
+  `OTHER` when the first secret is absent — which is how a missing npm token became a 404
+  about a missing package. Only use the idiom when the true-value is itself truthy;
+  otherwise use two steps with an `if:`, or decide in shell where empty is just empty.
 - **A reusable workflow cannot exceed its caller's permissions.** If the calling repository's
   default workflow permission is `read`, a called job asking for `packages: write` fails the
   same silent way. Declare `permissions` in the caller.
