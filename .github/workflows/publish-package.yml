@@ -58,6 +58,17 @@ on:
         description: "Also cut a GitHub Release for that tag, for repos whose history already has them."
         type: boolean
         default: false
+      runtime:
+        description: >-
+          `npm` (default) or `bun`. Every package here was npm-with-a-package-lock, so
+          the gate was npm-only by design.
+
+          elysia-mcp is the first bun package in this org: it is an Elysia library, and
+          Elysia is bun-first, so its suite imports `bun:test` and cannot run under node.
+          Its SOURCE uses no bun globals, which is why the published package still works
+          for node consumers — only the tests need the runtime.
+        type: string
+        default: npm
       scope:
         description: >-
           The npm scope to authenticate. Defaults to this org's own. It is an input
@@ -94,6 +105,7 @@ jobs:
     with:
       node-version: ${{ inputs.node-version }}
       steps: ${{ inputs.check-steps }}
+      runtime: ${{ inputs.runtime }}
     secrets: inherit
 
   publish:
@@ -115,13 +127,20 @@ jobs:
           node-version: ${{ inputs.node-version }}
           registry-url: ${{ inputs.registry }}
           scope: ${{ inputs.scope }}
-          cache: npm
+          cache: ${{ inputs.runtime == 'bun' && '' || 'npm' }}
 
       # Installs devDeps and runs `prepare` (the tsc build) so dist/ is fresh; the published
       # tarball ships dist/ per package.json "files", so consumers need no build step.
-      - run: npm ci
+      - uses: oven-sh/setup-bun@v2
+        if: inputs.runtime == 'bun'
+        with:
+          bun-version: latest
+
+      # npm still PUBLISHES; this only installs and builds, so dist/ exists in this job.
+      - run: ${{ inputs.runtime == 'bun' && 'bun install --frozen-lockfile' || 'npm ci' }}
         env:
           NODE_AUTH_TOKEN: ${{ github.token }}
+          GH_PACKAGES_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN || github.token }}
 
       # Distinguishes "not published yet" from "could not ask". `npm view` returning
       # non-zero was previously treated as not-published, so ANY registry error -- no read

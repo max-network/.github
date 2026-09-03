@@ -10,8 +10,9 @@ name: Check
 # file to copy, matching Max-Health-Inc/shared-ui's checks.yml"), which is the right
 # instinct pointed at the wrong target: a mirror still drifts. This is the shared original.
 #
-# npm, not bun: these repos have a package-lock.json and publish with `npm ci`, so the gate
-# installs the same way the release does.
+# npm by DEFAULT: these repos have a package-lock.json and publish with `npm ci`, so the
+# gate installs the same way the release does. `runtime: bun` switches both, for a package
+# whose suite cannot run under node.
 
 on:
   workflow_call:
@@ -26,6 +27,17 @@ on:
           define all three. A repo with a single `check` script can pass "check".
         type: string
         default: "typecheck test build"
+      runtime:
+        description: >-
+          `npm` (default) or `bun`. Every package here was npm-with-a-package-lock, so
+          the gate was npm-only by design.
+
+          elysia-mcp is the first bun package in this org: it is an Elysia library, and
+          Elysia is bun-first, so its suite imports `bun:test` and cannot run under node.
+          Its SOURCE uses no bun globals, which is why the published package still works
+          for node consumers — only the tests need the runtime.
+        type: string
+        default: npm
       timeout-minutes:
         description: "Fail the gate rather than hang a runner."
         type: number
@@ -44,25 +56,37 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - uses: oven-sh/setup-bun@v2
+        if: inputs.runtime == 'bun'
+        with:
+          bun-version: latest
+
+      # Kept for BOTH runtimes: it writes the .npmrc that authenticates the registry,
+      # which a bun install needs just as much. `cache: npm` is disabled for bun, because
+      # it fails outright when there is no package-lock.json to hash.
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ inputs.node-version }}
           registry-url: https://npm.pkg.github.com
           scope: "@max-network"
-          cache: npm
+          cache: ${{ inputs.runtime == 'bun' && '' || 'npm' }}
 
       # `npm ci` runs `prepare` (the tsc build), so dist/ is fresh for a build assertion.
       # NODE_AUTH_TOKEN is needed because these packages depend on each other from the
       # private GitHub Packages registry.
       - name: Install dependencies
-        run: npm ci
+        run: ${{ inputs.runtime == 'bun' && 'bun install --frozen-lockfile' || 'npm ci' }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_PACKAGES_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: Run gate
+        env:
+          RUNNER_CMD: ${{ inputs.runtime == 'bun' && 'bun' || 'npm' }}
+          GH_PACKAGES_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
           for s in ${{ inputs.steps }}; do
-            echo "::group::npm run $s"
-            npm run "$s"
+            echo "::group::$RUNNER_CMD run $s"
+            "$RUNNER_CMD" run "$s"
             echo "::endgroup::"
           done
