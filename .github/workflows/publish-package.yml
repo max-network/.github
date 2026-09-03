@@ -58,6 +58,17 @@ on:
         description: "Also cut a GitHub Release for that tag, for repos whose history already has them."
         type: boolean
         default: false
+      registry:
+        description: >-
+          Which registry to publish to. Defaults to GitHub Packages, where every
+          @max-network package has always gone.
+
+          Set it to https://registry.npmjs.org for a library meant to be installed by
+          people outside this org: GitHub Packages requires a token even to READ a
+          public package, so a package published only there cannot be adopted. An input
+          rather than a second workflow, for the reason this file's header already gives.
+        type: string
+        default: "https://npm.pkg.github.com"
 
 permissions:
   contents: read
@@ -81,16 +92,18 @@ jobs:
     permissions:
       contents: read
       packages: write
+      # Provenance signs the tarball with this workflow's OIDC identity.
+      id-token: write
     outputs:
       version: ${{ steps.probe.outputs.version }}
       published: ${{ steps.probe.outputs.published }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ inputs.node-version }}
-          registry-url: https://npm.pkg.github.com
+          registry-url: ${{ inputs.registry }}
           scope: "@max-network"
           cache: npm
 
@@ -119,6 +132,8 @@ jobs:
         env:
           PAT: ${{ secrets.GH_PACKAGES_TOKEN }}
           WORKFLOW_TOKEN: ${{ github.token }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          REGISTRY: ${{ inputs.registry }}
         run: |
           set -euo pipefail
           NAME=$(node -p "require('./package.json').name")
@@ -130,7 +145,17 @@ jobs:
           }
 
           TOKEN=""
+          if [ "$REGISTRY" = "https://registry.npmjs.org" ]; then
+            if [ -z "${NPM_TOKEN:-}" ]; then
+              echo "::error::registry is npmjs but NPM_TOKEN is not set. A GitHub token cannot publish there."
+              exit 1
+            fi
+            TOKEN="$NPM_TOKEN"
+            echo "npm auth: NPM_TOKEN"
+          fi
+
           for label in GH_PACKAGES_TOKEN "workflow token"; do
+            [ -z "$TOKEN" ] || break
             case "$label" in
               GH_PACKAGES_TOKEN) candidate="${PAT:-}" ;;
               *)                 candidate="$WORKFLOW_TOKEN" ;;
@@ -170,7 +195,11 @@ jobs:
 
           echo "published=false" >> "$GITHUB_OUTPUT"
           echo "Publishing \`$NAME@$VERSION\`." >> "$GITHUB_STEP_SUMMARY"
-          NODE_AUTH_TOKEN="$TOKEN" npm publish
+          if [ "$REGISTRY" = "https://registry.npmjs.org" ]; then
+            NODE_AUTH_TOKEN="$TOKEN" npm publish --access public --provenance
+          else
+            NODE_AUTH_TOKEN="$TOKEN" npm publish
+          fi
 
   # write to this job rather than widening the publish job.
   tag:
@@ -180,7 +209,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Skipped when the tag already exists, which is the case when this run was itself
       # triggered by pushing that tag. A tag pushed with the workflow token does not
