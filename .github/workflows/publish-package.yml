@@ -1,0 +1,255 @@
+name: Publish package
+
+# The ONE publish pipeline for every @max-network npm package.
+#
+# Each package repo used to carry its own copy of this file. They drifted, and not only in
+# wording — the TRIGGER itself diverged, which is a behaviour difference that silently stops
+# releases: some copies published on a merge to `main`, others only from a GitHub Release,
+# so a merged version bump could sit unpublished until someone cut a release by hand. The
+# fix was applied by copy-paste and several repos were missed.
+#
+# AUTH: whichever credential the registry ACCEPTS, decided per run rather than hardcoded.
+#
+# Neither candidate works everywhere. GitHub Packages' npm registry accepts a classic PAT,
+# and some repositories' workflow token is refused for package read and write; elsewhere the
+# PAT is the one that fails and the workflow token publishes fine. So the PAT is tried
+# first, the workflow token second, and the first one the registry answers is used. A
+# per-repo input would work too, and would reintroduce exactly the drift these shared
+# workflows exist to remove.
+#
+# The secret is NOT declared as a named `workflow_call` input. It was, and that silently
+# broke every publish: GitHub secret names cannot contain hyphens, and in an expression a
+# hyphenated name parses as subtraction rather than a name. NODE_AUTH_TOKEN got garbage and
+# npm returned 401. Nothing warns you.
+#
+# RELEASING = BUMPING THE VERSION IN YOUR PR. A merge whose version is already on the
+# registry publishes nothing and says so in the run summary, so a docs- or CI-only merge is a
+# safe no-op rather than a red build.
+
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        description: "Node major to build and publish with."
+        type: string
+        default: "22"
+      check-steps:
+        description: >-
+          Space-separated npm scripts forming the quality gate, passed straight to
+          check.yml so a release runs the IDENTICAL suite a pull request does. Publishing
+          a package that does not typecheck is worse than publishing late: every consumer
+          installs from a semver range, so a broken release reaches them on next install.
+        type: string
+        default: "typecheck test build"
+      tag-release:
+        description: "Push a `v<version>` tag at the published commit, so a registry version stays traceable to a commit."
+        type: boolean
+        default: false
+      create-release:
+        description: "Also cut a GitHub Release for that tag, for repos whose history already has them."
+        type: boolean
+        default: false
+      runtime:
+        description: >-
+          `npm` (default) or `bun`. Every package here was npm-with-a-package-lock, so
+          the gate was npm-only by design.
+
+          elysia-mcp is the first bun package in this org: it is an Elysia library, and
+          Elysia is bun-first, so its suite imports `bun:test` and cannot run under node.
+          Its SOURCE uses no bun globals, which is why the published package still works
+          for node consumers — only the tests need the runtime.
+        type: string
+        default: npm
+      scope:
+        description: >-
+          The npm scope to authenticate. Defaults to this org's own. It is an input
+          because a repository here may publish under a DIFFERENT scope — elysia-mcp
+          lives in max-network on GitHub but ships as @maxhealth.tech/elysia-mcp,
+          alongside the mcp-http package it names as its HTTP edge. Publishing worked
+          without this only by npm falling back to the default registry, which is not a
+          thing to depend on.
+        type: string
+        default: "@max-network"
+      registry:
+        description: >-
+          Which registry to publish to. Defaults to GitHub Packages, where every
+          @max-network package has always gone.
+
+          Set it to https://registry.npmjs.org for a library meant to be installed by
+          people outside this org: GitHub Packages requires a token even to READ a
+          public package, so a package published only there cannot be adopted. An input
+          rather than a second workflow, for the reason this file's header already gives.
+        type: string
+        default: "https://npm.pkg.github.com"
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  # The gate is CALLED, not restated, so a release and a pull request cannot drift.
+  # Referenced by full path rather than `./` because a `./` path inside a reusable
+  # workflow resolves against the CALLING repository, which would look for this file in
+  # the package repo instead of here.
+  check:
+    uses: max-network/.github/.github/workflows/check.yml@main
+    with:
+      node-version: ${{ inputs.node-version }}
+      steps: ${{ inputs.check-steps }}
+      runtime: ${{ inputs.runtime }}
+    secrets: inherit
+
+  publish:
+    needs: check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      # Provenance signs the tarball with this workflow's OIDC identity.
+      id-token: write
+    outputs:
+      version: ${{ steps.probe.outputs.version }}
+      published: ${{ steps.probe.outputs.published }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ inputs.node-version }}
+          registry-url: ${{ inputs.registry }}
+          scope: ${{ inputs.scope }}
+          cache: ${{ inputs.runtime == 'bun' && '' || 'npm' }}
+
+      # Installs devDeps and runs `prepare` (the tsc build) so dist/ is fresh; the published
+      # tarball ships dist/ per package.json "files", so consumers need no build step.
+      - uses: oven-sh/setup-bun@v2
+        if: inputs.runtime == 'bun'
+        with:
+          bun-version: latest
+
+      # npm still PUBLISHES; this only installs and builds, so dist/ exists in this job.
+      - run: ${{ inputs.runtime == 'bun' && 'bun install --frozen-lockfile' || 'npm ci' }}
+        env:
+          NODE_AUTH_TOKEN: ${{ github.token }}
+          GH_PACKAGES_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN || github.token }}
+
+      # Distinguishes "not published yet" from "could not ask". `npm view` returning
+      # non-zero was previously treated as not-published, so ANY registry error -- no read
+      # access, network, outage -- turned into an attempt to publish, which then failed with
+      # a write error that said nothing about the real cause. Only a genuine 404 means the
+      # version is absent; anything else stops the run and prints what npm actually said.
+      # Picks whichever credential the registry actually ACCEPTS for this package, instead
+      # of hardcoding one. Both candidates are real in this org: for some repositories the
+      # PAT is the working one, for others it is the workflow token. Hardcoding either breaks
+      # the other, and a per-repo input would just reintroduce the drift these shared
+      # workflows exist to remove.
+      #
+      # A candidate is accepted when the registry gives it an ANSWER -- success, or a 404
+      # meaning the package is simply not there yet. 401/403 means the credential is not
+      # good for this package, so we move on.
+      - name: Publish if the version is new
+        id: probe
+        env:
+          PAT: ${{ secrets.GH_PACKAGES_TOKEN }}
+          WORKFLOW_TOKEN: ${{ github.token }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          REGISTRY: ${{ inputs.registry }}
+        run: |
+          set -euo pipefail
+          NAME=$(node -p "require('./package.json').name")
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+          probe_with() {
+            NODE_AUTH_TOKEN="$1" npm view "$NAME" version 2>&1 || true
+          }
+
+          TOKEN=""
+          if [ "$REGISTRY" = "https://registry.npmjs.org" ]; then
+            if [ -z "${NPM_TOKEN:-}" ]; then
+              echo "::error::registry is npmjs but NPM_TOKEN is not set. A GitHub token cannot publish there."
+              exit 1
+            fi
+            TOKEN="$NPM_TOKEN"
+            echo "npm auth: NPM_TOKEN"
+          fi
+
+          for label in GH_PACKAGES_TOKEN "workflow token"; do
+            [ -z "$TOKEN" ] || break
+            case "$label" in
+              GH_PACKAGES_TOKEN) candidate="${PAT:-}" ;;
+              *)                 candidate="$WORKFLOW_TOKEN" ;;
+            esac
+            [ -n "$candidate" ] || continue
+
+            OUT=$(probe_with "$candidate")
+            if ! printf '%s' "$OUT" | grep -qE "E401|E403|code E4[01]"; then
+              TOKEN="$candidate"
+              echo "npm auth: $label"
+              break
+            fi
+            echo "npm auth: $label rejected by the registry, trying the next credential"
+          done
+
+          if [ -z "$TOKEN" ]; then
+            echo "::error::No credential could read $NAME. GH_PACKAGES_TOKEN was rejected or absent, and the workflow token lacks access to this package. Grant this repository access under Package settings -> Manage Actions access, or refresh GH_PACKAGES_TOKEN."
+            exit 1
+          fi
+
+          # Only a genuine 404 means this VERSION is absent. Any other error means the
+          # question could not be answered, and guessing would publish over a real failure.
+          set +e
+          OUT=$(NODE_AUTH_TOKEN="$TOKEN" npm view "$NAME@$VERSION" version 2>&1)
+          CODE=$?
+          set -e
+
+          if [ "$CODE" -eq 0 ]; then
+            echo "published=true" >> "$GITHUB_OUTPUT"
+            echo "\`$NAME@$VERSION\` is already on the registry — nothing to publish. Bump the version in package.json to cut a release." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          elif ! printf '%s' "$OUT" | grep -q "E404"; then
+            echo "::error::Could not determine whether $NAME@$VERSION is published. Refusing to guess."
+            echo "$OUT"
+            exit 1
+          fi
+
+          echo "published=false" >> "$GITHUB_OUTPUT"
+          echo "Publishing \`$NAME@$VERSION\`." >> "$GITHUB_STEP_SUMMARY"
+          if [ "$REGISTRY" = "https://registry.npmjs.org" ]; then
+            NODE_AUTH_TOKEN="$TOKEN" npm publish --access public --provenance
+          else
+            NODE_AUTH_TOKEN="$TOKEN" npm publish
+          fi
+
+  # write to this job rather than widening the publish job.
+  tag:
+    needs: publish
+    if: inputs.tag-release && needs.publish.outputs.published == 'false'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      # Skipped when the tag already exists, which is the case when this run was itself
+      # triggered by pushing that tag. A tag pushed with the workflow token does not
+      # re-trigger workflows, so this cannot loop.
+      - name: Tag the release
+        env:
+          VERSION: ${{ needs.publish.outputs.version }}
+          GH_TOKEN: ${{ github.token }}
+          CREATE_RELEASE: ${{ inputs.create-release }}
+        run: |
+          set -euo pipefail
+          TAG="v$VERSION"
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists — leaving it alone." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag "$TAG"
+          git push origin "$TAG"
+          if [ "$CREATE_RELEASE" = "true" ]; then
+            gh release create "$TAG" --title "$TAG" --generate-notes
+          fi
