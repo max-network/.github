@@ -64,11 +64,21 @@ jobs:
       # which a bun install needs just as much. `cache: npm` is disabled for bun, because
       # it fails outright when there is no package-lock.json to hash.
       - uses: actions/setup-node@v7
+        if: inputs.runtime != 'bun'
         with:
           node-version: ${{ inputs.node-version }}
           registry-url: https://npm.pkg.github.com
           scope: "@max-network"
-          cache: ${{ inputs.runtime == 'bun' && '' || 'npm' }}
+          cache: npm
+
+      # Same setup minus the cache: setup-node validates a lockfile the moment `cache` is
+      # set, and there is none under bun.
+      - uses: actions/setup-node@v7
+        if: inputs.runtime == 'bun'
+        with:
+          node-version: ${{ inputs.node-version }}
+          registry-url: https://npm.pkg.github.com
+          scope: "@max-network"
 
       # `npm ci` runs `prepare` (the tsc build), so dist/ is fresh for a build assertion.
       # NODE_AUTH_TOKEN is needed because these packages depend on each other from the
