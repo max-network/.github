@@ -58,6 +58,16 @@ on:
         description: "Also cut a GitHub Release for that tag, for repos whose history already has them."
         type: boolean
         default: false
+      scope:
+        description: >-
+          The npm scope to authenticate. Defaults to this org's own. It is an input
+          because a repository here may publish under a DIFFERENT scope — elysia-mcp
+          lives in max-network on GitHub but ships as @maxhealth.tech/elysia-mcp,
+          alongside the mcp-http package it names as its HTTP edge. Publishing worked
+          without this only by npm falling back to the default registry, which is not a
+          thing to depend on.
+        type: string
+        default: "@max-network"
       registry:
         description: >-
           Which registry to publish to. Defaults to GitHub Packages, where every
@@ -104,7 +114,7 @@ jobs:
         with:
           node-version: ${{ inputs.node-version }}
           registry-url: ${{ inputs.registry }}
-          scope: "@max-network"
+          scope: ${{ inputs.scope }}
           cache: npm
 
       # Installs devDeps and runs `prepare` (the tsc build) so dist/ is fresh; the published
