@@ -175,16 +175,23 @@ jobs:
           }
 
           TOKEN=""
+          OIDC=""
           if [ "$REGISTRY" = "https://registry.npmjs.org" ]; then
-            if [ -z "${NPM_TOKEN:-}" ]; then
-              echo "::error::registry is npmjs but NPM_TOKEN is not set. A GitHub token cannot publish there."
-              exit 1
+            # npmjs reads are anonymous, so the probe below needs no credential; only the
+            # publish does. Without NPM_TOKEN we publish via OIDC trusted publishing, which
+            # is what every other @maxhealth.tech package already uses — mcp-http, prefab
+            # and brandc all run `npx npm@latest publish --provenance` with no secret.
+            if [ -n "${NPM_TOKEN:-}" ]; then
+              TOKEN="$NPM_TOKEN"
+              echo "npm auth: NPM_TOKEN"
+            else
+              OIDC=1
+              echo "npm auth: OIDC trusted publishing"
             fi
-            TOKEN="$NPM_TOKEN"
-            echo "npm auth: NPM_TOKEN"
           fi
 
           for label in GH_PACKAGES_TOKEN "workflow token"; do
+            [ -z "$OIDC" ] || break
             [ -z "$TOKEN" ] || break
             case "$label" in
               GH_PACKAGES_TOKEN) candidate="${PAT:-}" ;;
@@ -201,7 +208,7 @@ jobs:
             echo "npm auth: $label rejected by the registry, trying the next credential"
           done
 
-          if [ -z "$TOKEN" ]; then
+          if [ -z "$TOKEN" ] && [ -z "$OIDC" ]; then
             echo "::error::No credential could read $NAME. GH_PACKAGES_TOKEN was rejected or absent, and the workflow token lacks access to this package. Grant this repository access under Package settings -> Manage Actions access, or refresh GH_PACKAGES_TOKEN."
             exit 1
           fi
@@ -225,7 +232,12 @@ jobs:
 
           echo "published=false" >> "$GITHUB_OUTPUT"
           echo "Publishing \`$NAME@$VERSION\`." >> "$GITHUB_STEP_SUMMARY"
-          if [ "$REGISTRY" = "https://registry.npmjs.org" ]; then
+          if [ -n "$OIDC" ]; then
+            # npx npm@latest because trusted publishing needs npm >= 11.5.1, which is
+            # newer than the runner ships. The caller's workflow filename is what npmjs
+            # matches against, not this one, so each package registers its own repo.
+            npx npm@latest publish --access public --provenance
+          elif [ "$REGISTRY" = "https://registry.npmjs.org" ]; then
             NODE_AUTH_TOKEN="$TOKEN" npm publish --access public --provenance
           else
             NODE_AUTH_TOKEN="$TOKEN" npm publish
