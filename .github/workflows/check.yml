@@ -31,7 +31,7 @@ on:
           `npm` (default) or `bun`. Every package here was npm-with-a-package-lock, so
           the gate was npm-only by design.
 
-          elysia-mcp is the first bun package in this org: it is an Elysia library, and
+          elysia-mcp was the first bun caller (now Max-Health-Inc/elysia-mcp): an Elysia library, and
           Elysia is bun-first, so its suite imports `bun:test` and cannot run under node.
           Its SOURCE uses no bun globals, which is why the published package still works
           for node consumers — only the tests need the runtime.

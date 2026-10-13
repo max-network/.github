@@ -54,7 +54,7 @@ on:
           `npm` (default) or `bun`. Every package here was npm-with-a-package-lock, so
           the gate was npm-only by design.
 
-          elysia-mcp is the first bun package in this org: it is an Elysia library, and
+          elysia-mcp was the first bun caller (now Max-Health-Inc/elysia-mcp): an Elysia library, and
           Elysia is bun-first, so its suite imports `bun:test` and cannot run under node.
           Its SOURCE uses no bun globals, which is why the published package still works
           for node consumers — only the tests need the runtime.
@@ -63,8 +63,8 @@ on:
       scope:
         description: >-
           The npm scope to authenticate. Defaults to this org's own. It is an input
-          because a repository here may publish under a DIFFERENT scope — elysia-mcp
-          lives in max-network on GitHub but ships as @maxhealth.tech/elysia-mcp,
+          because a caller may publish under a DIFFERENT scope. Max-Health-Inc/elysia-mcp
+          calls this public workflow from outside the org and ships as @maxhealth.tech/elysia-mcp,
           alongside the mcp-http package it names as its HTTP edge. Publishing worked
           without this only by npm falling back to the default registry, which is not a
           thing to depend on.
