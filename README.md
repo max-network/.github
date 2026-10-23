@@ -24,9 +24,19 @@ One definition means one place to fix each of those.
 | `publish-package.yml` | Build, gate and publish a package. Defaults to GitHub Packages; set `registry` to publish to public npm. Skips cleanly when the version is already on the registry. |
 | `check.yml` | The PR quality gate. Called directly on `pull_request` and reused by a repo's publish workflow so both run the identical suite. |
 | `auto-pr.yml` | Keeps a standing promotion PR open from the staging branch to `main`. |
+| `changelog-release.yml` | Changelog-driven npm release: stamps `[Unreleased]`, tags, cuts a GitHub Release, syncs the staging branch and dispatches the caller's `publish.yml`. Used by prefab and mcp-http. |
+| `python-check.yml` | ruff + pytest under uv across a Python version matrix. |
+| `pyproject-version.yml` | Reads the `pyproject.toml` version and reports whether it is already tagged. The PyPI upload stays in the caller, since trusted publishing rejects reusable workflows. |
 
 Both `check.yml` and `publish-package.yml` take `runtime: npm` (default) or `runtime: bun`,
 for a package whose suite cannot run under node.
+
+`publish-package.yml` also takes `gate: false` for a caller that runs its own gate job, and
+`install: none` or a custom install command for a package without a lockfile or with an
+`.npmrc` that reads `${GITHUB_TOKEN}`.
+
+Max-Health-Inc's **public** repositories call these too, because Max-Health-Inc/.github is
+private and GitHub only lets private repositories use a private repository's workflows.
 
 ## Using them
 
