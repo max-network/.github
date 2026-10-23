@@ -17,10 +17,10 @@ name: Publish package
 # per-repo input would work too, and would reintroduce exactly the drift these shared
 # workflows exist to remove.
 #
-# The secret is NOT declared as a named `workflow_call` input. It was, and that silently
-# broke every publish: GitHub secret names cannot contain hyphens, and in an expression a
-# hyphenated name parses as subtraction rather than a name. NODE_AUTH_TOKEN got garbage and
-# npm returned 401. Nothing warns you.
+# GH_PACKAGES_TOKEN is declared optional. Same-org callers pass it with `secrets: inherit`;
+# a caller in another org (Max-Health-Inc) must pass it by name, because `inherit` does not
+# cross organizations. Never declare a hyphenated name: in an expression it parses as
+# subtraction and the token silently becomes garbage.
 #
 # RELEASING = BUMPING THE VERSION IN YOUR PR. A merge whose version is already on the
 # registry publishes nothing and says so in the run summary, so a docs- or CI-only merge is a
@@ -94,6 +94,13 @@ on:
           has no lockfile. Anything else is run as the install command.
         type: string
         default: auto
+    secrets:
+      GH_PACKAGES_TOKEN:
+        description: "Classic PAT tried first for GitHub Packages. Optional."
+        required: false
+      NPM_TOKEN:
+        description: "npmjs token. Without it, npmjs publishes use OIDC trusted publishing."
+        required: false
 
 permissions:
   contents: read
