@@ -280,7 +280,7 @@ jobs:
   # write to this job rather than widening the publish job.
   tag:
     needs: publish
-    if: inputs.tag-release && needs.publish.outputs.published == 'false'
+    if: ${{ !cancelled() && needs.publish.result == 'success' && inputs.tag-release && needs.publish.outputs.published == 'false' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
