@@ -1,0 +1,216 @@
+name: Changelog release
+
+# Shared by prefab and mcp-http: stamps CHANGELOG [Unreleased] as the next version, tags,
+# cuts a GitHub Release, syncs the release commit back into the staging branch, and
+# dispatches the caller's publish workflow. A merge with nothing under [Unreleased] skips.
+
+on:
+  workflow_call:
+    inputs:
+      staging-branch:
+        description: "Branch the release commit is merged back into (e.g. dev, develop)."
+        type: string
+        required: true
+      base-branch:
+        description: "Branch the release commit and tag are pushed to."
+        type: string
+        default: main
+      checks:
+        description: "Quality gate, one command per line, run in order after the version bump."
+        type: string
+        required: true
+      build:
+        description: "Build command, run after the checks."
+        type: string
+        default: bun run build
+      sync-version:
+        description: "Optional command run after package.json is bumped; NEXT holds the new version."
+        type: string
+        default: ""
+      version-files:
+        description: "Extra space-separated paths committed with the release, e.g. a VERSION constant."
+        type: string
+        default: ""
+      pre-release:
+        description: "Optional command run before the GitHub Release is created."
+        type: string
+        default: ""
+      release-files:
+        description: "Assets attached to the GitHub Release, one path per line."
+        type: string
+        default: ""
+      changelog-script:
+        description: "Script that checks (--check) and stamps the changelog."
+        type: string
+        default: scripts/changelog-release.ts
+      publish-workflow:
+        description: "Workflow dispatched at the new tag, because tags pushed with GITHUB_TOKEN trigger nothing."
+        type: string
+        default: publish.yml
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  gate:
+    name: Decide whether to release
+    runs-on: ubuntu-latest
+    outputs:
+      next: ${{ steps.version.outputs.next }}
+      should_release: ${{ steps.changelog.outputs.should_release }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Determine next version
+        id: version
+        run: |
+          PACKAGE_NAME=$(jq -r .name package.json)
+          PKG_VERSION=$(jq -r .version package.json)
+
+          NPM_LATEST=$(npm view "$PACKAGE_NAME" version 2>/dev/null || echo "0.0.0")
+          echo "npm-latest=$NPM_LATEST" >> "$GITHUB_OUTPUT"
+
+          HIGHEST=$(printf '%s\n%s\n' "$NPM_LATEST" "$PKG_VERSION" | sort -V | tail -1)
+          if [ "$PKG_VERSION" != "$NPM_LATEST" ] && [ "$HIGHEST" = "$PKG_VERSION" ]; then
+            NEXT="$PKG_VERSION"
+          else
+            IFS='.' read -r MAJOR MINOR PATCH <<< "$NPM_LATEST"
+            NEXT="${MAJOR}.${MINOR}.$((PATCH + 1))"
+          fi
+          echo "next=$NEXT" >> "$GITHUB_OUTPUT"
+          echo "### Version: $NPM_LATEST → $NEXT" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Check changelog
+        id: changelog
+        env:
+          NEXT: ${{ steps.version.outputs.next }}
+          CHANGELOG_SCRIPT: ${{ inputs.changelog-script }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          STATUS=$(bun "$CHANGELOG_SCRIPT" --check "$NEXT")
+          echo "Changelog status for $NEXT: $STATUS"
+
+          if [ "$STATUS" = "missing" ]; then
+            if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+              echo "::error::CHANGELOG.md documents nothing for $NEXT. Add entries under '## [Unreleased]' before releasing."
+              exit 1
+            fi
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+            echo "### Skipped: nothing documented under [Unreleased]" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  release:
+    name: Test → Build → Release → Publish
+    needs: gate
+    if: needs.gate.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    env:
+      NEXT: ${{ needs.gate.outputs.next }}
+      BASE_BRANCH: ${{ inputs.base-branch }}
+      STAGING_BRANCH: ${{ inputs.staging-branch }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Stamp changelog entry
+        env:
+          CHANGELOG_SCRIPT: ${{ inputs.changelog-script }}
+        run: bun "$CHANGELOG_SCRIPT" "$NEXT"
+
+      - name: Update package.json version
+        env:
+          SYNC_VERSION: ${{ inputs.sync-version }}
+        run: |
+          jq --arg v "$NEXT" '.version = $v' package.json > package.json.tmp
+          mv package.json.tmp package.json
+          if [ -n "$SYNC_VERSION" ]; then
+            eval "$SYNC_VERSION"
+          fi
+          echo "Updated package.json to $NEXT"
+
+      - name: Quality gates
+        env:
+          CHECKS: ${{ inputs.checks }}
+        run: |
+          set -eo pipefail
+          while IFS= read -r cmd <&3; do
+            [ -n "${cmd// }" ] || continue
+            echo "::group::$cmd"
+            eval "$cmd"
+            echo "::endgroup::"
+          done 3<<< "$CHECKS"
+
+      - name: Build
+        env:
+          BUILD_CMD: ${{ inputs.build }}
+        run: eval "$BUILD_CMD"
+
+      - name: Commit & tag
+        env:
+          VERSION_FILES: ${{ inputs.version-files }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          read -ra EXTRA_FILES <<< "$VERSION_FILES"
+          git add package.json CHANGELOG.md "${EXTRA_FILES[@]}"
+          git commit -m "chore: release v${NEXT}" || echo "No changes to commit"
+          git tag "v${NEXT}"
+          git push origin "$BASE_BRANCH" --tags
+
+      # Best effort: a conflict is reported in the summary, never fails a completed release.
+      - name: Sync release commit back into the staging branch
+        run: |
+          git fetch origin "$STAGING_BRANCH" || exit 0
+          if git checkout -B "$STAGING_BRANCH" "origin/$STAGING_BRANCH" && git merge "$BASE_BRANCH" --no-edit; then
+            git push origin "$STAGING_BRANCH"
+            echo "- Synced \`v${NEXT}\` release commit back into \`${STAGING_BRANCH}\`" >> "$GITHUB_STEP_SUMMARY"
+          else
+            git merge --abort || true
+            echo "- :warning: Could not auto-sync \`v${NEXT}\` into \`${STAGING_BRANCH}\` (conflict). Merge \`${BASE_BRANCH}\` into \`${STAGING_BRANCH}\` by hand before the next release, or unreleased entries will be mis-filed under \`## [${NEXT}]\`." >> "$GITHUB_STEP_SUMMARY"
+          fi
+          git checkout "$BASE_BRANCH"
+
+      - name: Prepare release assets
+        if: inputs.pre-release != ''
+        env:
+          PRE_RELEASE: ${{ inputs.pre-release }}
+        run: eval "$PRE_RELEASE"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: v${{ needs.gate.outputs.next }}
+          name: v${{ needs.gate.outputs.next }}
+          generate_release_notes: true
+          files: ${{ inputs.release-files }}
+
+      - name: Trigger publish workflow
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PUBLISH_WORKFLOW: ${{ inputs.publish-workflow }}
+        run: gh workflow run "$PUBLISH_WORKFLOW" --ref "v${NEXT}"
+
+      - name: Summary
+        env:
+          PUBLISH_WORKFLOW: ${{ inputs.publish-workflow }}
+        run: |
+          PACKAGE_NAME=$(jq -r .name package.json)
+          echo "### ✅ Released ${PACKAGE_NAME}@${NEXT}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Release: ${{ github.server_url }}/${{ github.repository }}/releases/tag/v${NEXT}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- npm publish will be triggered by ${PUBLISH_WORKFLOW} via the v${NEXT} tag" >> "$GITHUB_STEP_SUMMARY"
