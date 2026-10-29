@@ -27,6 +27,7 @@ One definition means one place to fix each of those.
 | `changelog-release.yml` | Changelog-driven npm release: stamps `[Unreleased]`, tags, cuts a GitHub Release, syncs the staging branch and dispatches the caller's `publish.yml`. Used by prefab and mcp-http. |
 | `python-check.yml` | ruff + pytest under uv across a Python version matrix. |
 | `pyproject-version.yml` | Reads the `pyproject.toml` version and reports whether it is already tagged. The PyPI upload stays in the caller, since trusted publishing rejects reusable workflows. |
+| `d1-backup.yml` | Exports D1 databases to gzipped SQL in the `d1-backups` R2 bucket (35-day expiry), one folder per database. See [Restoring a D1 backup](#restoring-a-d1-backup). |
 
 Both `check.yml` and `publish-package.yml` take `runtime: npm` (default) or `runtime: bun`,
 for a package whose suite cannot run under node.
@@ -97,6 +98,44 @@ jobs:
       head-branch: develop
     secrets: inherit
 ```
+
+## Backing up a D1 database
+
+```yaml
+name: D1 backup
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+jobs:
+  backup:
+    uses: max-network/.github/.github/workflows/d1-backup.yml@main
+    with:
+      databases: '["my-database"]'
+    secrets:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+```
+
+The token needs D1 read and R2 write. The bucket and its 35-day lifecycle rule exist once per
+account (`wrangler r2 bucket create d1-backups`, then
+`wrangler r2 bucket lifecycle add d1-backups expire-after-35-days --expire-days 35`).
+
+### Restoring a D1 backup
+
+A database that answers every query with `internal error` cannot restore itself, and Time
+Travel goes through the same broken API. Restore into a new database instead:
+
+```sh
+wrangler r2 object get d1-backups/<db>/<timestamp>.sql.gz --file dump.sql.gz --remote
+gunzip dump.sql.gz
+wrangler d1 create <db>-restored --location <region>
+wrangler d1 execute <db>-restored --remote --file dump.sql
+```
+
+Then point the worker's `database_id` at the new database and deploy through the normal
+branch flow. Anything written after the backup is lost, so prefer waiting on Cloudflare when
+the outage is short.
 
 ## Gotchas these workflows already paid for
 
