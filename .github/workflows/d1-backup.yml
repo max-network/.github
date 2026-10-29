@@ -1,0 +1,62 @@
+name: D1 backup
+
+on:
+  workflow_call:
+    inputs:
+      databases:
+        description: 'JSON array of D1 database names to export, e.g. ["knowledge-base"].'
+        type: string
+        required: true
+      bucket:
+        description: "R2 bucket the gzipped SQL dumps go to, one folder per database."
+        type: string
+        default: "d1-backups"
+      wrangler-version:
+        description: "Exact wrangler version to run."
+        type: string
+        default: "4.155.0"
+    secrets:
+      CLOUDFLARE_API_TOKEN:
+        description: "Token with D1 read and R2 write on the account."
+        required: true
+      CLOUDFLARE_ACCOUNT_ID:
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  backup:
+    name: Back up ${{ matrix.database }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        database: ${{ fromJSON(inputs.databases) }}
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      DATABASE: ${{ matrix.database }}
+      BUCKET: ${{ inputs.bucket }}
+      WRANGLER: wrangler@${{ inputs.wrangler-version }}
+    steps:
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: Export
+        run: npx --yes "$WRANGLER" d1 export "$DATABASE" --remote --output dump.sql
+
+      - name: Verify the dump has a schema
+        run: |
+          test -s dump.sql
+          grep -q "CREATE TABLE" dump.sql
+          echo "$(grep -c '^INSERT' dump.sql) rows, $(wc -c < dump.sql) bytes" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload
+        run: |
+          gzip -9 dump.sql
+          KEY="$DATABASE/$(date -u +%Y-%m-%dT%H%M%SZ).sql.gz"
+          npx --yes "$WRANGLER" r2 object put "$BUCKET/$KEY" --file dump.sql.gz --content-type application/gzip --remote
+          echo "Uploaded \`$BUCKET/$KEY\`" >> "$GITHUB_STEP_SUMMARY"
