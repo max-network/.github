@@ -24,7 +24,8 @@ One definition means one place to fix each of those.
 | `publish-package.yml` | Build, gate and publish a package. Defaults to GitHub Packages; set `registry` to publish to public npm. Skips cleanly when the version is already on the registry. |
 | `check.yml` | The PR quality gate. Called directly on `pull_request` and reused by a repo's publish workflow so both run the identical suite. |
 | `auto-pr.yml` | Keeps a standing promotion PR open from the staging branch to `main`. |
-| `changelog-release.yml` | Changelog-driven npm release: stamps `[Unreleased]`, tags, cuts a GitHub Release, syncs the staging branch and dispatches the caller's `publish.yml`. Used by prefab and mcp-http. |
+| `changelog-release.yml` | Changelog-driven npm release: stamps `[Unreleased]`, tags, cuts a GitHub Release, syncs the staging branch and dispatches the caller's `publish.yml`. Runs `scripts/changelog.ts` from this repository, and refuses a release or staging sync that changes an already released section. Used by prefab and mcp-http. |
+| `changelog-guard.yml` | PR check that every released `CHANGELOG.md` section still matches the base branch. |
 | `python-check.yml` | ruff + pytest under uv across a Python version matrix. |
 | `pyproject-version.yml` | Reads the `pyproject.toml` version and reports whether it is already tagged. The PyPI upload stays in the caller, since trusted publishing rejects reusable workflows. |
 | `d1-backup.yml` | Exports D1 databases to gzipped SQL in the `d1-backups` R2 bucket (35-day expiry), one folder per database. See [Restoring a D1 backup](#restoring-a-d1-backup). |
@@ -38,6 +39,18 @@ for a package whose suite cannot run under node.
 
 Max-Health-Inc's **public** repositories call these too, because Max-Health-Inc/.github is
 private and GitHub only lets private repositories use a private repository's workflows.
+
+## Changelog script
+
+`scripts/changelog.ts` (bun, node built-ins only, so public callers need no registry token):
+
+- `--check <version>` prints `promoted`, `present` or `missing` and writes nothing.
+- `<version> [date]` stamps `## [Unreleased]` as the version, keeps a fresh `[Unreleased]` with
+  an anchor comment directly under it, and maintains the Keep a Changelog compare links.
+- `--verify <ref>` fails when a released section differs from `<ref>`.
+
+The anchor comment makes a release merge-back conflict instead of filing new entries under the
+version that just shipped; `--verify` catches the cases where git still merges silently.
 
 ## Using them
 

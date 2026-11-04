@@ -3,6 +3,7 @@ name: Changelog release
 # Shared by prefab and mcp-http: stamps CHANGELOG [Unreleased] as the next version, tags,
 # cuts a GitHub Release, syncs the release commit back into the staging branch, and
 # dispatches the caller's publish workflow. A merge with nothing under [Unreleased] skips.
+# The changelog logic is scripts/changelog.ts in this repository, checked out at shared-ref.
 
 on:
   workflow_call:
@@ -40,9 +41,17 @@ on:
         type: string
         default: ""
       changelog-script:
-        description: "Script that checks (--check) and stamps the changelog."
+        description: "Override for scripts/changelog.ts from this repository; empty uses the shared one."
         type: string
-        default: scripts/changelog-release.ts
+        default: ""
+      shared-ref:
+        description: "Ref of max-network/.github whose scripts/changelog.ts runs."
+        type: string
+        default: main
+      guard-released-sections:
+        description: "Refuse a release, and a staging sync, that changes an already released changelog section."
+        type: boolean
+        default: true
       publish-workflow:
         description: "Workflow dispatched at the new tag, because tags pushed with GITHUB_TOKEN trigger nothing."
         type: string
@@ -59,12 +68,30 @@ jobs:
     outputs:
       next: ${{ steps.version.outputs.next }}
       should_release: ${{ steps.changelog.outputs.should_release }}
+    env:
+      CHANGELOG_SCRIPT: ${{ inputs.changelog-script || '.org-ci/scripts/changelog.ts' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+
+      - name: Checkout shared scripts
+        uses: actions/checkout@v7
+        with:
+          repository: max-network/.github
+          ref: ${{ inputs.shared-ref }}
+          path: .org-ci
+          sparse-checkout: scripts
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
+
+      # A merge that rewrote a shipped section (usually unreleased entries mis-filed under it by a
+      # release merge-back) would otherwise leave [Unreleased] empty and skip the release silently.
+      - name: Released changelog sections unchanged
+        if: inputs.guard-released-sections
+        run: bun "$CHANGELOG_SCRIPT" --verify HEAD^1
 
       - name: Determine next version
         id: version
@@ -89,7 +116,6 @@ jobs:
         id: changelog
         env:
           NEXT: ${{ steps.version.outputs.next }}
-          CHANGELOG_SCRIPT: ${{ inputs.changelog-script }}
           EVENT_NAME: ${{ github.event_name }}
         run: |
           STATUS=$(bun "$CHANGELOG_SCRIPT" --check "$NEXT")
@@ -115,12 +141,22 @@ jobs:
       NEXT: ${{ needs.gate.outputs.next }}
       BASE_BRANCH: ${{ inputs.base-branch }}
       STAGING_BRANCH: ${{ inputs.staging-branch }}
+      CHANGELOG_SCRIPT: ${{ inputs.changelog-script || '.org-ci/scripts/changelog.ts' }}
+      GUARD: ${{ inputs.guard-released-sections }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Checkout shared scripts
+        uses: actions/checkout@v7
+        with:
+          repository: max-network/.github
+          ref: ${{ inputs.shared-ref }}
+          path: .org-ci
+          sparse-checkout: scripts
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -129,8 +165,6 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Stamp changelog entry
-        env:
-          CHANGELOG_SCRIPT: ${{ inputs.changelog-script }}
         run: bun "$CHANGELOG_SCRIPT" "$NEXT"
 
       - name: Update package.json version
@@ -178,6 +212,12 @@ jobs:
         run: |
           git fetch origin "$STAGING_BRANCH" || exit 0
           if git checkout -B "$STAGING_BRANCH" "origin/$STAGING_BRANCH" && git merge "$BASE_BRANCH" --no-edit; then
+            if [ "$GUARD" = "true" ] && ! bun "$CHANGELOG_SCRIPT" --verify "$BASE_BRANCH"; then
+              git reset --hard "origin/$STAGING_BRANCH"
+              echo "- :warning: Merging \`v${NEXT}\` into \`${STAGING_BRANCH}\` changed a released changelog section (unreleased entries filed under a published version). Not pushed: merge \`${BASE_BRANCH}\` into \`${STAGING_BRANCH}\` by hand and keep new entries under \`[Unreleased]\`." >> "$GITHUB_STEP_SUMMARY"
+              git checkout "$BASE_BRANCH"
+              exit 0
+            fi
             git push origin "$STAGING_BRANCH"
             echo "- Synced \`v${NEXT}\` release commit back into \`${STAGING_BRANCH}\`" >> "$GITHUB_STEP_SUMMARY"
           else
