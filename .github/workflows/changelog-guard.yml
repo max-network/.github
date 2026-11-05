@@ -1,0 +1,43 @@
+name: Changelog guard
+
+# PR-time half of changelog-release.yml's guard: fails when a released CHANGELOG section differs
+# from the base branch, the trace a release merge-back leaves when it files unreleased entries
+# under a published version without conflicting.
+
+on:
+  workflow_call:
+    inputs:
+      base-branch:
+        description: "Branch whose released sections are authoritative."
+        type: string
+        default: main
+      shared-ref:
+        description: "Ref of max-network/.github whose scripts/changelog.ts runs."
+        type: string
+        default: main
+
+permissions:
+  contents: read
+
+jobs:
+  guard:
+    name: Released changelog sections unchanged
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/checkout@v7
+        with:
+          repository: max-network/.github
+          ref: ${{ inputs.shared-ref }}
+          path: .org-ci
+          sparse-checkout: scripts
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Compare with the base branch
+        env:
+          BASE_BRANCH: ${{ inputs.base-branch }}
+        run: |
+          git fetch --depth=1 origin "$BASE_BRANCH"
+          bun .org-ci/scripts/changelog.ts --verify "origin/$BASE_BRANCH"
