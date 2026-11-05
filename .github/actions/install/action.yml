@@ -1,0 +1,52 @@
+name: Install dependencies
+description: >-
+  Runs the install with GH_PACKAGES_TOKEN, then with the workflow token if the registry
+  refused the first one, so a package install uses whichever credential GitHub Packages
+  accepts for this repository.
+
+inputs:
+  command:
+    description: Install command to run.
+    required: true
+  pat:
+    description: GH_PACKAGES_TOKEN, tried first. May be empty.
+    required: false
+    default: ""
+  workflow-token:
+    description: The calling job's github.token, tried second.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        INSTALL_CMD: ${{ inputs.command }}
+        PAT: ${{ inputs.pat }}
+        WORKFLOW_TOKEN: ${{ inputs.workflow-token }}
+      run: |
+        log=$(mktemp)
+        for label in GH_PACKAGES_TOKEN "workflow token"; do
+          case "$label" in
+            GH_PACKAGES_TOKEN) token="${PAT:-}" ;;
+            *)                 token="$WORKFLOW_TOKEN" ;;
+          esac
+          [ -n "$token" ] || continue
+          echo "::group::install with $label"
+          set +e
+          GH_PACKAGES_TOKEN="$token" GITHUB_TOKEN="$token" NODE_AUTH_TOKEN="$token" \
+            bash -c "$INSTALL_CMD" 2>&1 | tee "$log"
+          status=${PIPESTATUS[0]}
+          set -e
+          echo "::endgroup::"
+          if [ "$status" -eq 0 ]; then
+            echo "registry auth: $label"
+            exit 0
+          fi
+          if ! grep -qiE 'E401|E403|ENEEDAUTH|permission_denied|40[13] (Unauthorized|Forbidden)' "$log"; then
+            exit "$status"
+          fi
+          echo "::warning::The registry refused $label for this install."
+        done
+        echo "::error::No credential could install the private dependencies. Refresh GH_PACKAGES_TOKEN, or grant this repository read access under the package's settings -> Manage Actions access."
+        exit 1
