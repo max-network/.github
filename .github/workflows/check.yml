@@ -81,13 +81,12 @@ jobs:
           scope: "@max-network"
 
       # `npm ci` runs `prepare` (the tsc build), so dist/ is fresh for a build assertion.
-      # NODE_AUTH_TOKEN is needed because these packages depend on each other from the
-      # private GitHub Packages registry.
       - name: Install dependencies
-        run: ${{ inputs.runtime == 'bun' && 'bun install --frozen-lockfile' || 'npm ci' }}
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_PACKAGES_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
+        uses: max-network/.github/.github/actions/install@main
+        with:
+          command: ${{ inputs.runtime == 'bun' && 'bun install --frozen-lockfile' || 'npm ci' }}
+          pat: ${{ secrets.GH_PACKAGES_TOKEN }}
+          workflow-token: ${{ github.token }}
 
       - name: Run gate
         env:

@@ -173,7 +173,10 @@ the outage is short.
 - **Neither publish credential works everywhere.** GitHub Packages' npm registry takes a
   classic PAT, and for some repositories that is the only thing it accepts, while for others
   the workflow token is. `publish-package.yml` tries the PAT first, falls back to the
-  workflow token, and uses whichever the registry actually answers.
+  workflow token, and uses whichever the registry actually answers. Installs go through
+  `.github/actions/install`, which does the same: it retries with the workflow token only when
+  the registry refused the PAT. A green install can also hide a missing grant, because
+  `cache: npm` serves tarballs without asking the registry until the lockfile changes.
 - **A public repository cannot call a reusable workflow from a private one**, even inside the
   same org. That is why this repository is public.
 - **`cache: npm` on `setup-node` fails without a lockfile**, so it is disabled under

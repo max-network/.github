@@ -162,20 +162,11 @@ jobs:
       # npm still PUBLISHES; this only installs and builds, so dist/ exists in this job.
       - name: Install dependencies
         if: inputs.install != 'none'
-        env:
-          NODE_AUTH_TOKEN: ${{ github.token }}
-          GH_PACKAGES_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN || github.token }}
-          GITHUB_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN || github.token }}
-          RUNTIME: ${{ inputs.runtime }}
-          INSTALL_CMD: ${{ inputs.install }}
-        run: |
-          if [ "$INSTALL_CMD" != "auto" ]; then
-            eval "$INSTALL_CMD"
-          elif [ "$RUNTIME" = "bun" ]; then
-            bun install --frozen-lockfile
-          else
-            npm ci
-          fi
+        uses: max-network/.github/.github/actions/install@main
+        with:
+          command: ${{ inputs.install != 'auto' && inputs.install || (inputs.runtime == 'bun' && 'bun install --frozen-lockfile' || 'npm ci') }}
+          pat: ${{ secrets.GH_PACKAGES_TOKEN }}
+          workflow-token: ${{ github.token }}
 
       # Distinguishes "not published yet" from "could not ask". `npm view` returning
       # non-zero was previously treated as not-published, so ANY registry error -- no read
