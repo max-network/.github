@@ -1,30 +1,10 @@
 name: Publish package
 
-# The ONE publish pipeline for every @max-network npm package.
-#
-# Each package repo used to carry its own copy of this file. They drifted, and not only in
-# wording — the TRIGGER itself diverged, which is a behaviour difference that silently stops
-# releases: some copies published on a merge to `main`, others only from a GitHub Release,
-# so a merged version bump could sit unpublished until someone cut a release by hand. The
-# fix was applied by copy-paste and several repos were missed.
-#
-# AUTH: whichever credential the registry ACCEPTS, decided per run rather than hardcoded.
-#
-# Neither candidate works everywhere. GitHub Packages' npm registry accepts a classic PAT,
-# and some repositories' workflow token is refused for package read and write; elsewhere the
-# PAT is the one that fails and the workflow token publishes fine. So the PAT is tried
-# first, the workflow token second, and the first one the registry answers is used. A
-# per-repo input would work too, and would reintroduce exactly the drift these shared
-# workflows exist to remove.
-#
-# GH_PACKAGES_TOKEN is declared optional. Same-org callers pass it with `secrets: inherit`;
-# a caller in another org (Max-Health-Inc) must pass it by name, because `inherit` does not
-# cross organizations. Never declare a hyphenated name: in an expression it parses as
-# subtraction and the token silently becomes garbage.
-#
-# RELEASING = BUMPING THE VERSION IN YOUR PR. A merge whose version is already on the
-# registry publishes nothing and says so in the run summary, so a docs- or CI-only merge is a
-# safe no-op rather than a red build.
+# The one npm publish pipeline: gate via check.yml, then publish package.json's version if the
+# registry does not have it yet. Auth tries GH_PACKAGES_TOKEN, then the workflow token, and
+# uses the first one the registry accepts; npmjs without NPM_TOKEN uses OIDC trusted
+# publishing. A caller in another org passes GH_PACKAGES_TOKEN by name, since `inherit` does
+# not cross orgs.
 
 on:
   workflow_call:
@@ -34,66 +14,46 @@ on:
         type: string
         default: "22"
       check-steps:
-        description: >-
-          Space-separated npm scripts forming the quality gate, passed straight to
-          check.yml so a release runs the IDENTICAL suite a pull request does. Publishing
-          a package that does not typecheck is worse than publishing late: every consumer
-          installs from a semver range, so a broken release reaches them on next install.
+        description: "Space-separated scripts for the check.yml gate, the same suite a pull request runs."
         type: string
         default: "typecheck test build"
       tag-release:
-        description: "Push a `v<version>` tag at the published commit, so a registry version stays traceable to a commit."
+        description: "Push a `v<version>` tag at the published commit."
         type: boolean
         default: false
       create-release:
-        description: "Also cut a GitHub Release for that tag, for repos whose history already has them."
+        description: "Also cut a GitHub Release for that tag."
         type: boolean
         default: false
       runtime:
-        description: >-
-          `npm` (default) or `bun`. Every package here was npm-with-a-package-lock, so
-          the gate was npm-only by design.
-
-          elysia-mcp was the first bun caller (now Max-Health-Inc/elysia-mcp): an Elysia library, and
-          Elysia is bun-first, so its suite imports `bun:test` and cannot run under node.
-          Its SOURCE uses no bun globals, which is why the published package still works
-          for node consumers — only the tests need the runtime.
+        description: "`npm` (default) or `bun`, passed to check.yml and used for the install."
         type: string
         default: npm
       scope:
-        description: >-
-          The npm scope to authenticate. Defaults to this org's own. It is an input
-          because a caller may publish under a DIFFERENT scope. Max-Health-Inc/elysia-mcp
-          calls this public workflow from outside the org and ships as @maxhealth.tech/elysia-mcp,
-          alongside the mcp-http package it names as its HTTP edge. Publishing worked
-          without this only by npm falling back to the default registry, which is not a
-          thing to depend on.
+        description: "npm scope to authenticate, for a caller publishing outside @max-network."
         type: string
         default: "@max-network"
       registry:
-        description: >-
-          Which registry to publish to. Defaults to GitHub Packages, where every
-          @max-network package has always gone.
-
-          Set it to https://registry.npmjs.org for a library meant to be installed by
-          people outside this org: GitHub Packages requires a token even to READ a
-          public package, so a package published only there cannot be adopted. An input
-          rather than a second workflow, for the reason this file's header already gives.
+        description: "Registry to publish to. https://registry.npmjs.org for a package meant for people outside the org."
         type: string
         default: "https://npm.pkg.github.com"
       gate:
-        description: >-
-          Run check.yml before publishing. Turn it off only when the caller gates the
-          publish itself, with its own job in `needs`.
+        description: "Run check.yml first. Off only when the caller gates the publish in its own `needs` job."
         type: boolean
         default: true
       install:
         description: >-
           `auto` (default) installs with `npm ci` or `bun install --frozen-lockfile` per
-          `runtime`. `none` skips the install, for a package that ships its files as-is and
-          has no lockfile. Anything else is run as the install command.
+          `runtime`. `none` skips the install. Anything else is run as the install command.
+          Passed to check.yml as well.
         type: string
         default: auto
+      backport-dist-tag:
+        description: >-
+          Dist-tag for a version lower than the registry's current `latest`, so publishing a
+          backport does not move `latest` back to an older line.
+        type: string
+        default: legacy
     secrets:
       GH_PACKAGES_TOKEN:
         description: "Classic PAT tried first for GitHub Packages. Optional."
@@ -107,10 +67,7 @@ permissions:
   packages: write
 
 jobs:
-  # The gate is CALLED, not restated, so a release and a pull request cannot drift.
-  # Referenced by full path rather than `./` because a `./` path inside a reusable
-  # workflow resolves against the CALLING repository, which would look for this file in
-  # the package repo instead of here.
+  # Full path, because `./` inside a reusable workflow resolves against the caller.
   check:
     if: inputs.gate
     uses: max-network/.github/.github/workflows/check.yml@main
@@ -118,6 +75,7 @@ jobs:
       node-version: ${{ inputs.node-version }}
       steps: ${{ inputs.check-steps }}
       runtime: ${{ inputs.runtime }}
+      install: ${{ inputs.install }}
     secrets: inherit
 
   publish:
@@ -127,7 +85,6 @@ jobs:
     permissions:
       contents: read
       packages: write
-      # Provenance signs the tarball with this workflow's OIDC identity.
       id-token: write
     outputs:
       version: ${{ steps.probe.outputs.version }}
@@ -143,8 +100,6 @@ jobs:
           scope: ${{ inputs.scope }}
           cache: npm
 
-      # Same setup minus the cache: setup-node validates a lockfile the moment `cache` is
-      # set, and there is none under bun.
       - uses: actions/setup-node@v7
         if: inputs.runtime == 'bun' || inputs.install != 'auto'
         with:
@@ -152,14 +107,11 @@ jobs:
           registry-url: ${{ inputs.registry }}
           scope: ${{ inputs.scope }}
 
-      # Installs devDeps and runs `prepare` (the tsc build) so dist/ is fresh; the published
-      # tarball ships dist/ per package.json "files", so consumers need no build step.
       - uses: oven-sh/setup-bun@v2
         if: inputs.runtime == 'bun'
         with:
           bun-version: latest
 
-      # npm still PUBLISHES; this only installs and builds, so dist/ exists in this job.
       - name: Install dependencies
         if: inputs.install != 'none'
         uses: max-network/.github/.github/actions/install@main
@@ -168,20 +120,8 @@ jobs:
           pat: ${{ secrets.GH_PACKAGES_TOKEN }}
           workflow-token: ${{ github.token }}
 
-      # Distinguishes "not published yet" from "could not ask". `npm view` returning
-      # non-zero was previously treated as not-published, so ANY registry error -- no read
-      # access, network, outage -- turned into an attempt to publish, which then failed with
-      # a write error that said nothing about the real cause. Only a genuine 404 means the
-      # version is absent; anything else stops the run and prints what npm actually said.
-      # Picks whichever credential the registry actually ACCEPTS for this package, instead
-      # of hardcoding one. Both candidates are real in this org: for some repositories the
-      # PAT is the working one, for others it is the workflow token. Hardcoding either breaks
-      # the other, and a per-repo input would just reintroduce the drift these shared
-      # workflows exist to remove.
-      #
-      # A candidate is accepted when the registry gives it an ANSWER -- success, or a 404
-      # meaning the package is simply not there yet. 401/403 means the credential is not
-      # good for this package, so we move on.
+      # Only a 404 means "not published yet"; any other registry error stops the run rather
+      # than turning into a publish attempt that fails with an unrelated write error.
       - name: Publish if the version is new
         id: probe
         env:
@@ -189,6 +129,7 @@ jobs:
           WORKFLOW_TOKEN: ${{ github.token }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           REGISTRY: ${{ inputs.registry }}
+          BACKPORT_TAG: ${{ inputs.backport-dist-tag }}
         run: |
           set -euo pipefail
           NAME=$(node -p "require('./package.json').name")
@@ -202,10 +143,6 @@ jobs:
           TOKEN=""
           OIDC=""
           if [ "$REGISTRY" = "https://registry.npmjs.org" ]; then
-            # npmjs reads are anonymous, so the probe below needs no credential; only the
-            # publish does. Without NPM_TOKEN we publish via OIDC trusted publishing, which
-            # is what every other @maxhealth.tech package already uses — mcp-http, prefab
-            # and brandc all run `npx npm@latest publish --provenance` with no secret.
             if [ -n "${NPM_TOKEN:-}" ]; then
               TOKEN="$NPM_TOKEN"
               echo "npm auth: NPM_TOKEN"
@@ -238,8 +175,6 @@ jobs:
             exit 1
           fi
 
-          # Only a genuine 404 means this VERSION is absent. Any other error means the
-          # question could not be answered, and guessing would publish over a real failure.
           set +e
           OUT=$(GITHUB_TOKEN="$TOKEN" NODE_AUTH_TOKEN="$TOKEN" npm view "$NAME@$VERSION" version 2>&1)
           CODE=$?
@@ -255,20 +190,26 @@ jobs:
             exit 1
           fi
 
-          echo "published=false" >> "$GITHUB_OUTPUT"
-          echo "Publishing \`$NAME@$VERSION\`." >> "$GITHUB_STEP_SUMMARY"
-          if [ -n "$OIDC" ]; then
-            # npx npm@latest because trusted publishing needs npm >= 11.5.1, which is
-            # newer than the runner ships. The caller's workflow filename is what npmjs
-            # matches against, not this one, so each package registers its own repo.
-            npx npm@latest publish --access public --provenance
-          elif [ "$REGISTRY" = "https://registry.npmjs.org" ]; then
-            GITHUB_TOKEN="$TOKEN" NODE_AUTH_TOKEN="$TOKEN" npm publish --access public --provenance
-          else
-            GITHUB_TOKEN="$TOKEN" NODE_AUTH_TOKEN="$TOKEN" npm publish
+          # npm moves `latest` to whatever it publishes last, so a backport would hand new
+          # installs the older line.
+          LATEST=$(GITHUB_TOKEN="$TOKEN" NODE_AUTH_TOKEN="$TOKEN" npm view "$NAME" dist-tags.latest 2>/dev/null || true)
+          DIST_TAG=latest
+          if [ -n "$LATEST" ] && [ "$(printf '%s\n%s\n' "$LATEST" "$VERSION" | sort -V | tail -1)" != "$VERSION" ]; then
+            DIST_TAG="$BACKPORT_TAG"
           fi
 
-  # write to this job rather than widening the publish job.
+          echo "published=false" >> "$GITHUB_OUTPUT"
+          echo "Publishing \`$NAME@$VERSION\` as \`$DIST_TAG\` (latest was \`${LATEST:-none}\`)." >> "$GITHUB_STEP_SUMMARY"
+          if [ -n "$OIDC" ]; then
+            # Trusted publishing needs npm >= 11.5.1, newer than the runner ships. npmjs matches
+            # the caller's workflow filename, so each package registers its own repo.
+            npx npm@latest publish --access public --provenance --tag "$DIST_TAG"
+          elif [ "$REGISTRY" = "https://registry.npmjs.org" ]; then
+            GITHUB_TOKEN="$TOKEN" NODE_AUTH_TOKEN="$TOKEN" npm publish --access public --provenance --tag "$DIST_TAG"
+          else
+            GITHUB_TOKEN="$TOKEN" NODE_AUTH_TOKEN="$TOKEN" npm publish --tag "$DIST_TAG"
+          fi
+
   tag:
     needs: publish
     if: ${{ !cancelled() && needs.publish.result == 'success' && inputs.tag-release && needs.publish.outputs.published == 'false' }}
@@ -278,9 +219,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # Skipped when the tag already exists, which is the case when this run was itself
-      # triggered by pushing that tag. A tag pushed with the workflow token does not
-      # re-trigger workflows, so this cannot loop.
+      # A tag pushed with the workflow token does not re-trigger workflows, so this cannot loop.
       - name: Tag the release
         env:
           VERSION: ${{ needs.publish.outputs.version }}

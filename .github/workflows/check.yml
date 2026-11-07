@@ -1,17 +1,7 @@
 name: Check
 
-# The quality gate for every @max-network Node package, defined ONCE and used twice:
-#   - on every pull request in the calling repo;
-#   - by that repo's publish workflow, so a release runs exactly the same suite rather
-#     than a second copy of these steps that drifts from this one.
-#
-# Each repo previously carried its own checks.yml, and those copies already described
-# themselves as mirrors of one another — the right instinct pointed at the wrong target,
-# because a mirror still drifts. This is the shared original.
-#
-# npm by DEFAULT: these repos have a package-lock.json and publish with `npm ci`, so the
-# gate installs the same way the release does. `runtime: bun` switches both, for a package
-# whose suite cannot run under node.
+# The quality gate for every package caller, run on its pull requests and reused by
+# publish-package.yml so a release runs the identical suite.
 
 on:
   workflow_call:
@@ -21,22 +11,21 @@ on:
         type: string
         default: "22"
       steps:
-        description: >-
-          Space-separated npm scripts to run in order. The default matches the repos that
-          define all three. A repo with a single `check` script can pass "check".
+        description: "Space-separated package scripts to run in order."
         type: string
         default: "typecheck test build"
       runtime:
-        description: >-
-          `npm` (default) or `bun`. Every package here was npm-with-a-package-lock, so
-          the gate was npm-only by design.
-
-          elysia-mcp was the first bun caller (now Max-Health-Inc/elysia-mcp): an Elysia library, and
-          Elysia is bun-first, so its suite imports `bun:test` and cannot run under node.
-          Its SOURCE uses no bun globals, which is why the published package still works
-          for node consumers — only the tests need the runtime.
+        description: "`npm` (default) or `bun`. Selects the script runner and the default install."
         type: string
         default: npm
+      install:
+        description: >-
+          `auto` (default) installs with `npm ci` or `bun install --frozen-lockfile` per
+          `runtime`. `none` skips the install, for a package without a lockfile. Anything else
+          is run as the install command, e.g. `npm ci` for a bun-tested package with a
+          package-lock.
+        type: string
+        default: auto
       timeout-minutes:
         description: "Fail the gate rather than hang a runner."
         type: number
@@ -60,31 +49,27 @@ jobs:
         with:
           bun-version: latest
 
-      # Kept for BOTH runtimes: it writes the .npmrc that authenticates the registry,
-      # which a bun install needs just as much. `cache: npm` is disabled for bun, because
-      # it fails outright when there is no package-lock.json to hash.
+      # `cache: npm` needs a package-lock.json, so it is only set for an npm install.
       - uses: actions/setup-node@v7
-        if: inputs.runtime != 'bun'
+        if: inputs.runtime != 'bun' && inputs.install == 'auto'
         with:
           node-version: ${{ inputs.node-version }}
           registry-url: https://npm.pkg.github.com
           scope: "@max-network"
           cache: npm
 
-      # Same setup minus the cache: setup-node validates a lockfile the moment `cache` is
-      # set, and there is none under bun.
       - uses: actions/setup-node@v7
-        if: inputs.runtime == 'bun'
+        if: inputs.runtime == 'bun' || inputs.install != 'auto'
         with:
           node-version: ${{ inputs.node-version }}
           registry-url: https://npm.pkg.github.com
           scope: "@max-network"
 
-      # `npm ci` runs `prepare` (the tsc build), so dist/ is fresh for a build assertion.
       - name: Install dependencies
+        if: inputs.install != 'none'
         uses: max-network/.github/.github/actions/install@main
         with:
-          command: ${{ inputs.runtime == 'bun' && 'bun install --frozen-lockfile' || 'npm ci' }}
+          command: ${{ inputs.install != 'auto' && inputs.install || (inputs.runtime == 'bun' && 'bun install --frozen-lockfile' || 'npm ci') }}
           pat: ${{ secrets.GH_PACKAGES_TOKEN }}
           workflow-token: ${{ github.token }}
 
@@ -92,8 +77,9 @@ jobs:
         env:
           RUNNER_CMD: ${{ inputs.runtime == 'bun' && 'bun' || 'npm' }}
           GH_PACKAGES_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
+          STEPS: ${{ inputs.steps }}
         run: |
-          for s in ${{ inputs.steps }}; do
+          for s in $STEPS; do
             echo "::group::$RUNNER_CMD run $s"
             "$RUNNER_CMD" run "$s"
             echo "::endgroup::"
