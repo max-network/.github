@@ -33,9 +33,13 @@ One definition means one place to fix each of those.
 Both `check.yml` and `publish-package.yml` take `runtime: npm` (default) or `runtime: bun`,
 for a package whose suite cannot run under node.
 
-`publish-package.yml` also takes `gate: false` for a caller that runs its own gate job, and
-`install: none` or a custom install command for a package without a lockfile or with an
-`.npmrc` that reads `${GITHUB_TOKEN}`.
+Both also take `install: none` or a custom install command, for a package without a lockfile,
+with an `.npmrc` that reads `${GITHUB_TOKEN}`, or tested under bun with a package-lock
+(`runtime: bun` plus `install: npm ci`). `publish-package.yml` passes it on to its gate.
+
+`publish-package.yml` also takes `gate: false` for a caller that runs its own gate job. A
+version lower than the registry's `latest` is published under `backport-dist-tag` (default
+`legacy`), so a backport never moves `latest` to an older line.
 
 Max-Health-Inc's **public** repositories call these too, because Max-Health-Inc/.github is
 private and GitHub only lets private repositories use a private repository's workflows.
