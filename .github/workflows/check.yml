@@ -30,6 +30,10 @@ on:
         description: "Fail the gate rather than hang a runner."
         type: number
         default: 10
+    secrets:
+      GH_PACKAGES_TOKEN:
+        description: "Classic PAT tried first for private dependencies. Optional; a caller in another org passes it by name."
+        required: false
 
 permissions:
   contents: read
