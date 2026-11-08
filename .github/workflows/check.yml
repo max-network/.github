@@ -48,7 +48,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: oven-sh/setup-bun@v2
+      - uses: max-network/.github/.github/actions/setup-bun@main
         if: inputs.runtime == 'bun'
         with:
           bun-version: latest

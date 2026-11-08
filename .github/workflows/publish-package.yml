@@ -107,7 +107,7 @@ jobs:
           registry-url: ${{ inputs.registry }}
           scope: ${{ inputs.scope }}
 
-      - uses: oven-sh/setup-bun@v2
+      - uses: max-network/.github/.github/actions/setup-bun@main
         if: inputs.runtime == 'bun'
         with:
           bun-version: latest

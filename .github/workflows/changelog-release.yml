@@ -85,7 +85,7 @@ jobs:
           sparse-checkout: scripts
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+        uses: max-network/.github/.github/actions/setup-bun@main
 
       # A merge that rewrote a shipped section (usually unreleased entries mis-filed under it by a
       # release merge-back) would otherwise leave [Unreleased] empty and skip the release silently.
@@ -159,7 +159,7 @@ jobs:
           sparse-checkout: scripts
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+        uses: max-network/.github/.github/actions/setup-bun@main
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
