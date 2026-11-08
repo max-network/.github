@@ -6,9 +6,13 @@ description: >-
 
 inputs:
   bun-version:
-    description: "Bun version, or `latest`."
+    description: "Bun version, or `latest`. Empty with no bun-version-file means latest."
     required: false
-    default: latest
+    default: ""
+  bun-version-file:
+    description: "File holding the version: package.json (packageManager bun@x.y.z), .bun-version or .tool-versions. Used when bun-version is empty."
+    required: false
+    default: ""
 
 outputs:
   bun-version:
@@ -23,14 +27,17 @@ runs:
       uses: oven-sh/setup-bun@v2
       with:
         bun-version: ${{ inputs.bun-version }}
+        bun-version-file: ${{ inputs.bun-version-file }}
 
     - id: npm
       if: steps.github.outcome == 'failure'
       shell: bash
       env:
         BUN_VERSION: ${{ inputs.bun-version }}
+        BUN_VERSION_FILE: ${{ inputs.bun-version-file }}
       run: |
         echo "::warning::GitHub could not serve Bun; installing it from the npm registry."
-        version=$(bash "$GITHUB_ACTION_PATH/install-from-npm.sh" "$BUN_VERSION" "$HOME/.bun" | tail -1)
+        requested=$(bash "$GITHUB_ACTION_PATH/resolve-version.sh" "$BUN_VERSION" "$BUN_VERSION_FILE")
+        version=$(bash "$GITHUB_ACTION_PATH/install-from-npm.sh" "$requested" "$HOME/.bun" | tail -1)
         echo "$HOME/.bun/bin" >> "$GITHUB_PATH"
         echo "bun-version=$version" >> "$GITHUB_OUTPUT"
