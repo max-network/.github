@@ -162,7 +162,7 @@ jobs:
             [ -n "$candidate" ] || continue
 
             OUT=$(probe_with "$candidate")
-            if ! printf '%s' "$OUT" | grep -qE "E401|E403|code E4[01]"; then
+            if ! printf '%s' "$OUT" | grep -qiE "E401|E403|ENEEDAUTH|40[13] (Unauthorized|Forbidden)"; then
               TOKEN="$candidate"
               echo "npm auth: $label"
               break
