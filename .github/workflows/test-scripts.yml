@@ -2,10 +2,10 @@ name: Test scripts
 
 on:
   pull_request:
-    paths: ["scripts/**", ".github/workflows/test-scripts.yml"]
+    paths: ["scripts/**", ".github/actions/**", ".github/workflows/test-scripts.yml"]
   push:
     branches: [main]
-    paths: ["scripts/**"]
+    paths: ["scripts/**", ".github/actions/**"]
 
 permissions:
   contents: read

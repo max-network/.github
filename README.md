@@ -155,7 +155,8 @@ lookup needs `actions: read`; without it the lookup misses and the gate simply r
 
 ## Setup Bun
 
-`.github/actions/setup-bun` runs `oven-sh/setup-bun` and, when GitHub cannot serve the release
+`.github/actions/setup-bun` (`bun-version`, or `bun-version-file` for package.json's `packageManager`,
+`.bun-version` or `.tool-versions`) runs `oven-sh/setup-bun` and, when GitHub cannot serve the release
 download, installs the same build from the npm registry (`@oven/bun-<os>-<arch>`). Use it
 instead of `oven-sh/setup-bun` in every workflow: on 2026-11-08 GitHub's release downloads
 answered 504 for over an hour, longer than any retry backs off, while npm served Bun throughout.
