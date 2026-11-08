@@ -1,0 +1,36 @@
+name: Setup Bun
+description: >-
+  oven-sh/setup-bun, falling back to the same Bun build from the npm registry when GitHub's
+  release downloads fail. On 2026-11-08 they answered 504 for over an hour while npm served
+  @oven/bun-* fine.
+
+inputs:
+  bun-version:
+    description: "Bun version, or `latest`."
+    required: false
+    default: latest
+
+outputs:
+  bun-version:
+    description: "The installed Bun version."
+    value: ${{ steps.github.outputs.bun-version || steps.npm.outputs.bun-version }}
+
+runs:
+  using: composite
+  steps:
+    - id: github
+      continue-on-error: true
+      uses: oven-sh/setup-bun@v2
+      with:
+        bun-version: ${{ inputs.bun-version }}
+
+    - id: npm
+      if: steps.github.outcome == 'failure'
+      shell: bash
+      env:
+        BUN_VERSION: ${{ inputs.bun-version }}
+      run: |
+        echo "::warning::GitHub could not serve Bun; installing it from the npm registry."
+        version=$(bash "$GITHUB_ACTION_PATH/install-from-npm.sh" "$BUN_VERSION" "$HOME/.bun" | tail -1)
+        echo "$HOME/.bun/bin" >> "$GITHUB_PATH"
+        echo "bun-version=$version" >> "$GITHUB_OUTPUT"

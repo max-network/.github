@@ -153,6 +153,13 @@ tree, so the gate runs once instead of up to four times. The record is an artifa
 the tree and a hash of `key`; only runs of the repository itself count, never a fork's. The
 lookup needs `actions: read`; without it the lookup misses and the gate simply runs.
 
+## Setup Bun
+
+`.github/actions/setup-bun` runs `oven-sh/setup-bun` and, when GitHub cannot serve the release
+download, installs the same build from the npm registry (`@oven/bun-<os>-<arch>`). Use it
+instead of `oven-sh/setup-bun` in every workflow: on 2026-11-08 GitHub's release downloads
+answered 504 for over an hour, longer than any retry backs off, while npm served Bun throughout.
+
 ## Backing up a D1 database
 
 ```yaml
