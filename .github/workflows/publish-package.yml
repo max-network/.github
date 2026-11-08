@@ -63,6 +63,7 @@ on:
         required: false
 
 permissions:
+  actions: read
   contents: read
   packages: write
 
