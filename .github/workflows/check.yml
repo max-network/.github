@@ -36,6 +36,7 @@ on:
         required: false
 
 permissions:
+  actions: read
   contents: read
   packages: read
 
@@ -46,16 +47,24 @@ jobs:
     timeout-minutes: ${{ inputs.timeout-minutes }}
 
     steps:
+      - name: Skip a tree this gate already passed
+        id: verified
+        uses: max-network/.github/.github/actions/verified-tree@main
+        with:
+          mode: lookup
+          key: ${{ inputs.runtime }} ${{ inputs.install }} ${{ inputs.node-version }} ${{ inputs.steps }}
+
       - uses: actions/checkout@v7
+        if: steps.verified.outputs.verified != 'true'
 
       - uses: max-network/.github/.github/actions/setup-bun@main
-        if: inputs.runtime == 'bun'
+        if: steps.verified.outputs.verified != 'true' && inputs.runtime == 'bun'
         with:
           bun-version: latest
 
       # `cache: npm` needs a package-lock.json, so it is only set for an npm install.
       - uses: actions/setup-node@v7
-        if: inputs.runtime != 'bun' && inputs.install == 'auto'
+        if: steps.verified.outputs.verified != 'true' && inputs.runtime != 'bun' && inputs.install == 'auto'
         with:
           node-version: ${{ inputs.node-version }}
           registry-url: https://npm.pkg.github.com
@@ -63,14 +72,14 @@ jobs:
           cache: npm
 
       - uses: actions/setup-node@v7
-        if: inputs.runtime == 'bun' || inputs.install != 'auto'
+        if: steps.verified.outputs.verified != 'true' && (inputs.runtime == 'bun' || inputs.install != 'auto')
         with:
           node-version: ${{ inputs.node-version }}
           registry-url: https://npm.pkg.github.com
           scope: "@max-network"
 
       - name: Install dependencies
-        if: inputs.install != 'none'
+        if: steps.verified.outputs.verified != 'true' && inputs.install != 'none'
         uses: max-network/.github/.github/actions/install@main
         with:
           command: ${{ inputs.install != 'auto' && inputs.install || (inputs.runtime == 'bun' && 'bun install --frozen-lockfile' || 'npm ci') }}
@@ -78,6 +87,7 @@ jobs:
           workflow-token: ${{ github.token }}
 
       - name: Run gate
+        if: steps.verified.outputs.verified != 'true'
         env:
           RUNNER_CMD: ${{ inputs.runtime == 'bun' && 'bun' || 'npm' }}
           GH_PACKAGES_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
@@ -88,3 +98,10 @@ jobs:
             "$RUNNER_CMD" run "$s"
             echo "::endgroup::"
           done
+
+      - name: Record the verified tree
+        if: steps.verified.outputs.verified != 'true'
+        uses: max-network/.github/.github/actions/verified-tree@main
+        with:
+          mode: record
+          key: ${{ inputs.runtime }} ${{ inputs.install }} ${{ inputs.node-version }} ${{ inputs.steps }}
