@@ -1,0 +1,81 @@
+name: Verified tree
+description: >-
+  Records that a git tree passed a gate, and finds that record again, so identical content is
+  verified once instead of again on its pull request, its staging branch, the promotion pull
+  request and main. Records come from this repository's own runs only; a fork's run cannot
+  vouch for a tree. A failed lookup reports a miss, so the gate runs.
+
+inputs:
+  mode:
+    description: "`lookup` sets `verified`; `record` stores the record and belongs after the gate passed."
+    required: true
+  key:
+    description: "What the gate ran, e.g. its commands. A record only matches the same key."
+    required: false
+    default: gate
+  retention-days:
+    description: "How long a record stays valid."
+    required: false
+    default: "30"
+  token:
+    description: "Token that can read this repository's Actions artifacts (actions: read)."
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  verified:
+    description: "`true` when this repository already verified the same tree with the same key."
+    value: ${{ steps.lookup.outputs.verified || 'false' }}
+  tree:
+    description: "The git tree of the commit under test."
+    value: ${{ steps.name.outputs.tree }}
+
+runs:
+  using: composite
+  steps:
+    - id: name
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        KEY: ${{ inputs.key }}
+      run: |
+        tree=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA" --jq .commit.tree.sha 2>/dev/null || true)
+        key=$(printf '%s' "$KEY" | sha256sum | cut -c1-12)
+        echo "tree=$tree" >> "$GITHUB_OUTPUT"
+        if [ -n "$tree" ]; then
+          echo "name=verified-$key-$tree" >> "$GITHUB_OUTPUT"
+        fi
+
+    - id: lookup
+      if: inputs.mode == 'lookup' && steps.name.outputs.name != ''
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        NAME: ${{ steps.name.outputs.name }}
+      run: |
+        hits=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=$NAME&per_page=30" \
+          --jq '[.artifacts[] | select(.expired | not) | select(.workflow_run.head_repository_id == .workflow_run.repository_id)] | length' \
+          2>/dev/null || echo 0)
+        if [ "${hits:-0}" -gt 0 ]; then
+          echo "verified=true" >> "$GITHUB_OUTPUT"
+          echo "::notice::Tree ${NAME##*-} already passed this gate; skipping it."
+        else
+          echo "verified=false" >> "$GITHUB_OUTPUT"
+        fi
+
+    - if: inputs.mode == 'record' && steps.name.outputs.name != ''
+      shell: bash
+      env:
+        NAME: ${{ steps.name.outputs.name }}
+      run: |
+        mkdir -p "$RUNNER_TEMP/verified-tree"
+        echo "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" > "$RUNNER_TEMP/verified-tree/$NAME"
+
+    - if: inputs.mode == 'record' && steps.name.outputs.name != ''
+      uses: actions/upload-artifact@v7
+      with:
+        name: ${{ steps.name.outputs.name }}
+        path: ${{ runner.temp }}/verified-tree/${{ steps.name.outputs.name }}
+        retention-days: ${{ inputs.retention-days }}
+        overwrite: true
+        if-no-files-found: error

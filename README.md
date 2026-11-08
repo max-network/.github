@@ -29,6 +29,7 @@ One definition means one place to fix each of those.
 | `python-check.yml` | ruff + pytest under uv across a Python version matrix. |
 | `pyproject-version.yml` | Reads the `pyproject.toml` version and reports whether it is already tagged. The PyPI upload stays in the caller, since trusted publishing rejects reusable workflows. |
 | `d1-backup.yml` | Exports D1 databases to gzipped SQL in the `d1-backups` R2 bucket (35-day expiry), one folder per database. See [Restoring a D1 backup](#restoring-a-d1-backup). |
+| `retry-transient.yml` | Reruns a failed run's failed jobs when every one of them died on a network or outage error (a 5xx from GitHub or a registry, a reset connection, a lost runner), waiting 1, 2, 3, then 4 minutes between attempts. A failing test is never retried. See [Retrying transient failures](#retrying-transient-failures). |
 
 Both `check.yml` and `publish-package.yml` take `runtime: npm` (default) or `runtime: bun`,
 for a package whose suite cannot run under node.
@@ -58,7 +59,7 @@ version that just shipped; `--verify` catches the cases where git still merges s
 
 ## Using them
 
-A package repo needs three small caller files.
+A package repo needs four small caller files.
 
 `.github/workflows/check.yml`:
 
@@ -115,6 +116,42 @@ jobs:
       head-branch: develop
     secrets: inherit
 ```
+
+`.github/workflows/retry.yml`:
+
+```yaml
+name: Retry transient failures
+on:
+  workflow_run:
+    workflows: ["**"]
+    types: [completed]
+permissions:
+  actions: write
+  contents: read
+jobs:
+  retry:
+    if: github.event.workflow_run.conclusion == 'failure'
+    uses: max-network/.github/.github/workflows/retry-transient.yml@main
+```
+
+## Retrying transient failures
+
+`workflow_run` only fires for workflow files on the default branch, so `retry.yml` takes effect
+once it is on `main`. It then watches every workflow in the repository, itself excluded.
+
+`scripts/transient-failure.sh` reads `gh run view --log-failed` and decides per failed job. It
+only trusts `##[error]` lines and the error lines npm, pnpm and bun print for a failed fetch,
+because a test that exercises an outage logs the same words as a real outage. One failed job
+without a transient cause leaves the whole run for a person.
+
+## Verified tree
+
+`.github/actions/verified-tree` records that a git tree passed a gate (`mode: record`, as the
+gate's last step) and finds the record again (`mode: lookup`, as its first). A pull request, the
+push that merges it, the promotion pull request and the push to `main` usually carry the same
+tree, so the gate runs once instead of up to four times. The record is an artifact named after
+the tree and a hash of `key`; only runs of the repository itself count, never a fork's. The
+lookup needs `actions: read`; without it the lookup misses and the gate simply runs.
 
 ## Backing up a D1 database
 
