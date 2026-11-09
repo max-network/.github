@@ -55,6 +55,23 @@ describe("transient-failure.sh", () => {
     expect(result.transient).toBe(true);
   });
 
+  it("retries a Pages Function publish Cloudflare failed with an unknown internal error", () => {
+    const result = classify(
+      line("deploy / deploy", "Deploy", "✘ [ERROR] Deployment failed!"),
+      line("deploy / deploy", "Deploy", "  Failed to publish your Function. Got error: Unknown internal error occurred."),
+      line("deploy / deploy", "Deploy", "##[error]Process completed with exit code 1."),
+    );
+    expect(result.transient).toBe(true);
+  });
+
+  it("does not retry a Pages Function publish refused for a reason", () => {
+    const result = classify(
+      line("deploy / deploy", "Deploy", "  Failed to publish your Function. Got error: Your Functions script is over the 1 MiB size limit."),
+      line("deploy / deploy", "Deploy", "##[error]Process completed with exit code 1."),
+    );
+    expect(result.transient).toBe(false);
+  });
+
   it("retries a runner that lost its connection", () => {
     expect(classify(line("build", "Build", "##[error]The runner has received a shutdown signal.")).transient).toBe(true);
   });
