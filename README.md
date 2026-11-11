@@ -38,6 +38,10 @@ Both also take `install: none` or a custom install command, for a package withou
 with an `.npmrc` that reads `${GITHUB_TOKEN}`, or tested under bun with a package-lock
 (`runtime: bun` plus `install: npm ci`). `publish-package.yml` passes it on to its gate.
 
+`check.yml` takes `working-directory` (default `.`) for a repository whose package is not at
+its root, such as a worker in `worker/`. The install and every step run there. The directory
+joins the verified-tree key only when it is not `.`, so existing callers keep their records.
+
 `publish-package.yml` also takes `gate: false` for a caller that runs its own gate job. A
 version lower than the registry's `latest` is published under `backport-dist-tag` (default
 `legacy`), so a backport never moves `latest` to an older line.

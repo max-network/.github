@@ -15,11 +15,16 @@ inputs:
   workflow-token:
     description: The calling job's github.token, tried second.
     required: true
+  working-directory:
+    description: Directory the install runs in, relative to the workspace.
+    required: false
+    default: "."
 
 runs:
   using: composite
   steps:
     - shell: bash
+      working-directory: ${{ inputs.working-directory }}
       env:
         INSTALL_CMD: ${{ inputs.command }}
         PAT: ${{ inputs.pat }}

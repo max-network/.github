@@ -26,6 +26,10 @@ on:
           package-lock.
         type: string
         default: auto
+      working-directory:
+        description: "Directory holding the package.json the gate installs and runs, for a repository whose package is not at its root."
+        type: string
+        default: "."
       timeout-minutes:
         description: "Fail the gate rather than hang a runner."
         type: number
@@ -52,7 +56,7 @@ jobs:
         uses: max-network/.github/.github/actions/verified-tree@main
         with:
           mode: lookup
-          key: ${{ inputs.runtime }} ${{ inputs.install }} ${{ inputs.node-version }} ${{ inputs.steps }}
+          key: ${{ inputs.runtime }} ${{ inputs.install }} ${{ inputs.node-version }} ${{ inputs.steps }}${{ inputs.working-directory != '.' && format(' {0}', inputs.working-directory) || '' }}
 
       - uses: actions/checkout@v7
         if: steps.verified.outputs.verified != 'true'
@@ -70,6 +74,7 @@ jobs:
           registry-url: https://npm.pkg.github.com
           scope: "@max-network"
           cache: npm
+          cache-dependency-path: ${{ inputs.working-directory }}/package-lock.json
 
       - uses: actions/setup-node@v7
         if: steps.verified.outputs.verified != 'true' && (inputs.runtime == 'bun' || inputs.install != 'auto')
@@ -85,9 +90,11 @@ jobs:
           command: ${{ inputs.install != 'auto' && inputs.install || (inputs.runtime == 'bun' && 'bun install --frozen-lockfile' || 'npm ci') }}
           pat: ${{ secrets.GH_PACKAGES_TOKEN }}
           workflow-token: ${{ github.token }}
+          working-directory: ${{ inputs.working-directory }}
 
       - name: Run gate
         if: steps.verified.outputs.verified != 'true'
+        working-directory: ${{ inputs.working-directory }}
         env:
           RUNNER_CMD: ${{ inputs.runtime == 'bun' && 'bun' || 'npm' }}
           GH_PACKAGES_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
@@ -104,4 +111,4 @@ jobs:
         uses: max-network/.github/.github/actions/verified-tree@main
         with:
           mode: record
-          key: ${{ inputs.runtime }} ${{ inputs.install }} ${{ inputs.node-version }} ${{ inputs.steps }}
+          key: ${{ inputs.runtime }} ${{ inputs.install }} ${{ inputs.node-version }} ${{ inputs.steps }}${{ inputs.working-directory != '.' && format(' {0}', inputs.working-directory) || '' }}
