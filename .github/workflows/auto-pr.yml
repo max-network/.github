@@ -29,6 +29,14 @@ on:
         description: "Body for the standing PR. Defaults to a generic promotion note."
         type: string
         default: ""
+      note:
+        description: "Extra line appended to the body, e.g. what merging triggers."
+        type: string
+        default: ""
+      refresh-body:
+        description: "Rewrite the open PR's body on every push, with the commits ahead and the time of the update."
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -61,6 +69,27 @@ jobs:
           COMMITS_AHEAD=$(git rev-list --count "origin/${BASE_BRANCH}..origin/${HEAD_BRANCH}")
           echo "commits_ahead=$COMMITS_AHEAD" >> "$GITHUB_OUTPUT"
 
+      - name: Compose body
+        id: body
+        env:
+          PR_BODY: ${{ inputs.body != '' && inputs.body || format('Standing promotion PR, kept up to date by `auto-pr.yml`. Merging promotes `{0}` into `{1}`.', inputs.head-branch, inputs.base-branch) }}
+          PR_NOTE: ${{ inputs.note }}
+          REFRESH: ${{ inputs.refresh-body }}
+          COMMITS_AHEAD: ${{ steps.check-diff.outputs.commits_ahead }}
+        run: |
+          body="$PR_BODY"
+          if [ -n "$PR_NOTE" ]; then
+            body="$body"$'\n\n'"$PR_NOTE"
+          fi
+          if [ "$REFRESH" = "true" ]; then
+            body="$body"$'\n\n'"Commits ahead of ${BASE_BRANCH}: ${COMMITS_AHEAD}"$'\n'"_Updated: $(date -u '+%Y-%m-%d %H:%M:%S UTC')_"
+          fi
+          {
+            echo "text<<PR_BODY_EOF"
+            echo "$body"
+            echo "PR_BODY_EOF"
+          } >> "$GITHUB_OUTPUT"
+
       # Nothing to promote is a normal state, not a failure — a push whose commits are
       # already on the base branch should not redden the run.
       - name: Create PR
@@ -68,13 +97,22 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_TITLE: ${{ inputs.title != '' && inputs.title || format('🚀 Promote {0} → {1}', inputs.head-branch, inputs.base-branch) }}
-          PR_BODY: ${{ inputs.body != '' && inputs.body || format('Standing promotion PR, kept up to date by `auto-pr.yml`. Merging promotes `{0}` into `{1}`.', inputs.head-branch, inputs.base-branch) }}
+          PR_BODY: ${{ steps.body.outputs.text }}
         run: |
           gh pr create \
             --base "$BASE_BRANCH" \
             --head "$HEAD_BRANCH" \
             --title "$PR_TITLE" \
             --body "$PR_BODY"
+
+      - name: Refresh the open PR
+        if: inputs.refresh-body && steps.check-pr.outputs.pr_exists != '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_BODY: ${{ steps.body.outputs.text }}
+        run: |
+          number=$(gh pr list --base "$BASE_BRANCH" --head "$HEAD_BRANCH" --state open --json number --jq '.[0].number')
+          gh pr edit "$number" --body "$PR_BODY"
 
       - name: Summary
         run: |

@@ -121,6 +121,12 @@ jobs:
     secrets: inherit
 ```
 
+`note` appends a line to the body (what merging triggers, for instance). `refresh-body: true`
+rewrites the open PR's body on every push with the commits ahead and the time of the update;
+without it the body is written once, when the PR opens. Both work from any org, since this
+repository is public. The PR is opened with the workflow token, so its `pull_request` checks
+wait for approval; an App token would avoid that.
+
 `.github/workflows/retry.yml`:
 
 ```yaml
