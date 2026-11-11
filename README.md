@@ -42,6 +42,12 @@ with an `.npmrc` that reads `${GITHUB_TOKEN}`, or tested under bun with a packag
 its root, such as a worker in `worker/`. The install and every step run there. The directory
 joins the verified-tree key only when it is not `.`, so existing callers keep their records.
 
+On a pull request `check.yml` also checks the lockfile it installs from (`package-lock.json`
+for npm, `bun.lock` for bun, or the one the custom `install` names). It fails when the
+dependencies in `package.json` changed but that lockfile did not, and it warns about any
+other lockfile in the directory, since CI never reads it and it drifts. A dependency bump made
+with the other installer is what broke legal-web's beta deploy on 2026-11-11.
+
 `publish-package.yml` also takes `gate: false` for a caller that runs its own gate job. A
 version lower than the registry's `latest` is published under `backport-dist-tag` (default
 `legacy`), so a backport never moves `latest` to an older line.
