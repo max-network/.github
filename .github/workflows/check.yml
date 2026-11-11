@@ -77,6 +77,7 @@ jobs:
             *"pnpm install"*) lock=pnpm-lock.yaml ;;
             *) exit 0 ;;
           esac
+          [ -f "$lock" ] || exit 0
           prefix=""
           [ "$DIR" != "." ] && prefix="${DIR%/}/"
           for other in package-lock.json bun.lock bun.lockb pnpm-lock.yaml yarn.lock; do
