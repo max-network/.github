@@ -84,6 +84,16 @@ jobs:
           path: .org-ci
           sparse-checkout: scripts
 
+      # Callers lint or typecheck the whole workspace; the shared scripts must not be in it.
+      - name: Move shared scripts out of the workspace
+        env:
+          CUSTOM_SCRIPT: ${{ inputs.changelog-script }}
+        run: |
+          mv .org-ci "$RUNNER_TEMP/org-ci"
+          if [ -z "$CUSTOM_SCRIPT" ]; then
+            echo "CHANGELOG_SCRIPT=$RUNNER_TEMP/org-ci/scripts/changelog.ts" >> "$GITHUB_ENV"
+          fi
+
       - name: Setup Bun
         uses: max-network/.github/.github/actions/setup-bun@main
 
@@ -157,6 +167,16 @@ jobs:
           ref: ${{ inputs.shared-ref }}
           path: .org-ci
           sparse-checkout: scripts
+
+      # Callers lint or typecheck the whole workspace; the shared scripts must not be in it.
+      - name: Move shared scripts out of the workspace
+        env:
+          CUSTOM_SCRIPT: ${{ inputs.changelog-script }}
+        run: |
+          mv .org-ci "$RUNNER_TEMP/org-ci"
+          if [ -z "$CUSTOM_SCRIPT" ]; then
+            echo "CHANGELOG_SCRIPT=$RUNNER_TEMP/org-ci/scripts/changelog.ts" >> "$GITHUB_ENV"
+          fi
 
       - name: Setup Bun
         uses: max-network/.github/.github/actions/setup-bun@main
