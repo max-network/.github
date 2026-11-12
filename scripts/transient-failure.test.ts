@@ -72,6 +72,24 @@ describe("transient-failure.sh", () => {
     expect(result.transient).toBe(false);
   });
 
+  it("retries a Workers deploy whose Cloudflare API call failed with the unknown error 10013", () => {
+    const result = classify(
+      line("deploy / deploy", "Deploy to Production", "✘ [ERROR] A request to the Cloudflare API (/accounts/***/workers/scripts/chess-mcp/assets-upload-session) failed."),
+      line("deploy / deploy", "Deploy to Production", "  An unknown error has occurred. If this error persists, please file a report in workers-sdk (https://github.com/cloudflare/workers-sdk/issues) or reach out to your account team. [code: 10013]"),
+      line("deploy / deploy", "Deploy to Production", "##[error]Process completed with exit code 1."),
+    );
+    expect(result.transient).toBe(true);
+  });
+
+  it("does not retry a Cloudflare API call refused for a reason", () => {
+    const result = classify(
+      line("deploy / deploy", "Deploy to Production", "✘ [ERROR] A request to the Cloudflare API (/accounts/***/workers/scripts/chess-mcp/versions) failed."),
+      line("deploy / deploy", "Deploy to Production", "  Uncaught ReferenceError: process is not defined [code: 10021]"),
+      line("deploy / deploy", "Deploy to Production", "##[error]Process completed with exit code 1."),
+    );
+    expect(result.transient).toBe(false);
+  });
+
   it("retries a runner that lost its connection", () => {
     expect(classify(line("build", "Build", "##[error]The runner has received a shutdown signal.")).transient).toBe(true);
   });
