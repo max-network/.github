@@ -8,6 +8,7 @@ function transient(msg, err) {
   if (msg ~ /^err_pnpm_(meta_)?fetch_(5[0-9][0-9]|fail)/) return 1
   if (msg ~ /^error: get [^ ]+ - (5[0-9][0-9]|429)/) return 1
   if (msg ~ /failed to publish your function\. got error: unknown internal error occurred/) return 1
+  if (msg ~ /an unknown error has occurred\. if this error persists.*\[code: 10013\]/) return 1
   return 0
 }
 NF >= 3 {
