@@ -9,7 +9,7 @@ on:
       node-version:
         description: "Node major to run the gate on."
         type: string
-        default: "22"
+        default: "26"
       steps:
         description: "Space-separated package scripts to run in order."
         type: string

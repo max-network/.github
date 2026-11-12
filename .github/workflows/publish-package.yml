@@ -12,7 +12,7 @@ on:
       node-version:
         description: "Node major to build and publish with."
         type: string
-        default: "22"
+        default: "26"
       check-steps:
         description: "Space-separated scripts for the check.yml gate, the same suite a pull request runs."
         type: string
