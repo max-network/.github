@@ -28,6 +28,7 @@ One definition means one place to fix each of those.
 | `changelog-guard.yml` | PR check that every released `CHANGELOG.md` section still matches the base branch. |
 | `python-check.yml` | ruff + pytest under uv across a Python version matrix. |
 | `pyproject-version.yml` | Reads the `pyproject.toml` version and reports whether it is already tagged. The PyPI upload stays in the caller, since trusted publishing rejects reusable workflows. |
+| `deploy-worker.yml` | Install, gate, migrate D1 and `wrangler deploy` one environment of an npm Worker, stamped with its build version. `release: true` tags production with release notes. See [Deploying a Worker](#deploying-a-worker). |
 | `d1-backup.yml` | Exports D1 databases to gzipped SQL in the `d1-backups` R2 bucket (35-day expiry), one folder per database. See [Restoring a D1 backup](#restoring-a-d1-backup). |
 | `retry-transient.yml` | Reruns a failed run's failed jobs when every one of them died on a network or outage error (a 5xx from GitHub or a registry, a reset connection, a lost runner), waiting 1, 2, 3, then 4 minutes between attempts. A failing test is never retried. See [Retrying transient failures](#retrying-transient-failures). |
 
@@ -176,6 +177,55 @@ lookup needs `actions: read`; without it the lookup misses and the gate simply r
 download, installs the same build from the npm registry (`@oven/bun-<os>-<arch>`). Use it
 instead of `oven-sh/setup-bun` in every workflow: on 2026-11-08 GitHub's release downloads
 answered 504 for over an hour, longer than any retry backs off, while npm served Bun throughout.
+
+## Deploying a Worker
+
+One caller per environment, so beta and production share every step:
+
+```yaml
+name: deploy-prod
+on:
+  push:
+    branches: [main]
+concurrency:
+  group: prod
+  cancel-in-progress: false
+jobs:
+  deploy:
+    permissions:
+      contents: write
+      packages: read
+    uses: max-network/.github/.github/workflows/deploy-worker.yml@main
+    with:
+      environment: Production
+      wrangler-env: production
+      d1-database: my-database
+      release: true
+    secrets: inherit
+```
+
+The beta caller is the same on `test` with `wrangler-env: beta`, `contents: read` and no `release`.
+`working-directory` points at a worker outside the repository root, `check` names the gate's
+package scripts (default `check`), and `pre-deploy` runs a command with the Cloudflare
+credentials before the migrations.
+
+Versions come from `@max-health-inc/config/vite/release`, which the worker lists as a dev
+dependency. The checkout keeps full history and tags, so beta deploys as a pre-release of the
+next tag (`0.1.5-beta.202611161200.abc1234`) and production as the release
+(`0.1.4+202611161200.abc1234`). The version reaches the code as `__APP_VERSION__` through
+`wrangler deploy --define`; read it with a guard so tests and `wrangler dev` still run:
+
+```ts
+declare const __APP_VERSION__: string | undefined;
+export const APP_VERSION = typeof __APP_VERSION__ === "string" ? __APP_VERSION__ : "dev";
+```
+
+`release: true` runs `release-tag prepare` before a production deploy from `production-branch`,
+which writes AI release notes into an annotated `vX.Y.Z` tag, and `release-tag publish` after
+it, which pushes the tag and creates the GitHub release. The notes use `RELEASE_NOTES_TOKEN`
+(a Cloudflare token with Workers AI) and fall back to the deploy token; without a working token
+the tag is still cut, without notes. A repository that already uses `v*` tags for something
+else must not set `release`.
 
 ## Backing up a D1 database
 

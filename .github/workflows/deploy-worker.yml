@@ -1,0 +1,186 @@
+name: Deploy Worker
+
+# Install, gate, migrate D1, then `wrangler deploy` one environment of an npm Cloudflare Worker.
+# Every deploy is stamped with its build version (@max-health-inc/config/vite/release) as
+# `__APP_VERSION__`; `release: true` also tags production with release-tag and publishes its
+# GitHub release, which needs the caller to grant `contents: write`.
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: "Label for the job and step names (Beta | Production)."
+        required: true
+        type: string
+      wrangler-env:
+        description: "The wrangler --env target."
+        required: true
+        type: string
+      d1-database:
+        description: "D1 database whose migrations run before the deploy. Empty skips them."
+        required: false
+        type: string
+        default: ""
+      working-directory:
+        description: "Directory holding the worker's package.json and wrangler config."
+        required: false
+        type: string
+        default: "."
+      node-version:
+        required: false
+        type: string
+        default: "26"
+      check:
+        description: "Space-separated package scripts run as the gate. Empty skips it."
+        required: false
+        type: string
+        default: "check"
+      pre-deploy:
+        description: "Command run after the gate and before the migrations, with the Cloudflare credentials."
+        required: false
+        type: string
+        default: ""
+      release:
+        description: "Tag production deploys with release-tag and publish their GitHub release."
+        required: false
+        type: boolean
+        default: false
+      production-branch:
+        description: "The only branch `release` tags."
+        required: false
+        type: string
+        default: "main"
+      timeout-minutes:
+        required: false
+        type: number
+        default: 20
+    secrets:
+      GH_PACKAGES_TOKEN:
+        description: "read:packages token for private dependencies, tried before the workflow token."
+        required: false
+      CF_API_TOKEN:
+        required: false
+      CF_ACCOUNT_ID:
+        required: false
+      CLOUDFLARE_API_TOKEN:
+        description: "Alias of CF_API_TOKEN, used when CF_API_TOKEN is not set."
+        required: false
+      CLOUDFLARE_ACCOUNT_ID:
+        description: "Alias of CF_ACCOUNT_ID, used when CF_ACCOUNT_ID is not set."
+        required: false
+      RELEASE_NOTES_TOKEN:
+        description: "Workers AI token for release notes. Falls back to the Cloudflare API token."
+        required: false
+    outputs:
+      version:
+        description: "The deployed build version, or empty without @max-health-inc/config."
+        value: ${{ jobs.deploy.outputs.version }}
+
+# No permissions block: the job takes the caller's, so a caller with `release: true` can grant `contents: write`.
+jobs:
+  deploy:
+    name: Deploy ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    env:
+      RELEASING: ${{ inputs.release && github.ref == format('refs/heads/{0}', inputs.production-branch) }}
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      # Release tags and their history decide the version, on beta as on production.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ inputs.node-version }}
+          registry-url: https://npm.pkg.github.com
+          scope: "@max-network"
+          cache: npm
+          cache-dependency-path: ${{ inputs.working-directory }}/package-lock.json
+
+      - name: Install dependencies
+        uses: max-network/.github/.github/actions/install@main
+        with:
+          command: npm ci
+          pat: ${{ secrets.GH_PACKAGES_TOKEN }}
+          workflow-token: ${{ github.token }}
+          working-directory: ${{ inputs.working-directory }}
+
+      - name: Gate
+        if: inputs.check != ''
+        env:
+          STEPS: ${{ inputs.check }}
+          NODE_AUTH_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN || github.token }}
+          GH_PACKAGES_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN || github.token }}
+        run: |
+          for s in $STEPS; do
+            echo "::group::npm run $s"
+            npm run "$s"
+            echo "::endgroup::"
+          done
+
+      - name: Pre-deploy
+        if: inputs.pre-deploy != ''
+        env:
+          PRE_DEPLOY: ${{ inputs.pre-deploy }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN || secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID || secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: bash -c "$PRE_DEPLOY"
+
+      # Before the deploy, so new code never meets a missing column. Idempotent, so the retry
+      # only absorbs transient Cloudflare API timeouts.
+      - name: Apply D1 migrations (${{ inputs.environment }})
+        if: inputs.d1-database != ''
+        env:
+          D1_DATABASE: ${{ inputs.d1-database }}
+          WRANGLER_ENV: ${{ inputs.wrangler-env }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN || secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID || secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          for attempt in 1 2 3; do
+            npx wrangler d1 migrations apply "$D1_DATABASE" --env "$WRANGLER_ENV" --remote && exit 0
+            echo "::warning::migration attempt $attempt failed; retrying in 10s"
+            sleep 10
+          done
+          echo "::error::D1 migrations failed after 3 attempts"
+          exit 1
+
+      # Writes the public notes into an annotated tag on HEAD, locally; it is pushed only after the deploy.
+      - name: Write release notes and tag
+        if: env.RELEASING == 'true'
+        env:
+          RELEASE_NOTES_TOKEN: ${{ secrets.RELEASE_NOTES_TOKEN || secrets.CF_API_TOKEN || secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID || secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx release-tag prepare
+
+      - name: Resolve the build version
+        id: version
+        env:
+          VITE_RELEASE_CHANNEL: ${{ env.RELEASING == 'true' && 'RELEASE' || '' }}
+        run: |
+          version="$(node --input-type=module -e "const r = await import('@max-health-inc/config/vite/release'); process.stdout.write(r.resolveBuildVersion(r.readPackageVersion(process.cwd()), process.env))" 2>/dev/null || true)"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Build version: ${version:-(unversioned)}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Deploy (${{ inputs.environment }})
+        env:
+          WRANGLER_ENV: ${{ inputs.wrangler-env }}
+          APP_VERSION: ${{ steps.version.outputs.version }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN || secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID || secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          args=(--env "$WRANGLER_ENV")
+          if [ -n "$APP_VERSION" ]; then args+=(--define "__APP_VERSION__:\"$APP_VERSION\""); fi
+          echo "Deploying ${APP_VERSION:-(unversioned)} to $WRANGLER_ENV"
+          npx wrangler deploy "${args[@]}"
+
+      - name: Publish the release
+        if: env.RELEASING == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: npx release-tag publish
