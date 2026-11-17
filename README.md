@@ -49,7 +49,7 @@ dependencies in `package.json` changed but that lockfile did not, and it warns a
 other lockfile in the directory, since CI never reads it and it drifts. A dependency bump made
 with the other installer is what broke legal-web's beta deploy on 2026-11-11.
 
-`publish-package.yml` also takes `gate: false` for a caller that runs its own gate job. A
+`publish-package.yml` also takes `gate: false` for a caller that runs its own gate job. `prerelease: beta` publishes `<version>-beta.<UTC yyyymmddHHMM>.<short sha>` under the `beta` dist-tag instead of the release, untagged, and the workflow's `version` output names what it published, for a caller that deploys that exact build. A
 version lower than the registry's `latest` is published under `backport-dist-tag` (default
 `legacy`), so a backport never moves `latest` to an older line.
 

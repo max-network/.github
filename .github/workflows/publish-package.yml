@@ -54,6 +54,20 @@ on:
           backport does not move `latest` back to an older line.
         type: string
         default: legacy
+      prerelease:
+        description: >-
+          Channel for a prerelease such as `beta`. Publishes
+          `<version>-<channel>.<UTC yyyymmddHHMM>.<short sha>` under that dist-tag instead of
+          package.json's version, and never tags the commit. Empty publishes the release.
+        type: string
+        default: ""
+    outputs:
+      version:
+        description: "The version this run published, or found already published."
+        value: ${{ jobs.publish.outputs.version }}
+      published:
+        description: "'true' when that version was already on the registry, so nothing was published."
+        value: ${{ jobs.publish.outputs.published }}
     secrets:
       GH_PACKAGES_TOKEN:
         description: "Classic PAT tried first for GitHub Packages. Optional."
@@ -131,10 +145,15 @@ jobs:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           REGISTRY: ${{ inputs.registry }}
           BACKPORT_TAG: ${{ inputs.backport-dist-tag }}
+          PRERELEASE: ${{ inputs.prerelease }}
         run: |
           set -euo pipefail
           NAME=$(node -p "require('./package.json').name")
           VERSION=$(node -p "require('./package.json').version")
+          if [ -n "$PRERELEASE" ]; then
+            VERSION="${VERSION%%-*}-${PRERELEASE}.$(date -u +%Y%m%d%H%M).${GITHUB_SHA::9}"
+            npm pkg set version="$VERSION"
+          fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
           probe_with() {
@@ -195,7 +214,9 @@ jobs:
           # installs the older line.
           LATEST=$(GITHUB_TOKEN="$TOKEN" NODE_AUTH_TOKEN="$TOKEN" npm view "$NAME" dist-tags.latest 2>/dev/null || true)
           DIST_TAG=latest
-          if [ -n "$LATEST" ] && [ "$(printf '%s\n%s\n' "$LATEST" "$VERSION" | sort -V | tail -1)" != "$VERSION" ]; then
+          if [ -n "$PRERELEASE" ]; then
+            DIST_TAG="$PRERELEASE"
+          elif [ -n "$LATEST" ] && [ "$(printf '%s\n%s\n' "$LATEST" "$VERSION" | sort -V | tail -1)" != "$VERSION" ]; then
             DIST_TAG="$BACKPORT_TAG"
           fi
 
@@ -213,7 +234,7 @@ jobs:
 
   tag:
     needs: publish
-    if: ${{ !cancelled() && needs.publish.result == 'success' && inputs.tag-release && needs.publish.outputs.published == 'false' }}
+    if: ${{ !cancelled() && needs.publish.result == 'success' && inputs.tag-release && inputs.prerelease == '' && needs.publish.outputs.published == 'false' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
