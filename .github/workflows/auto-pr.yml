@@ -99,11 +99,15 @@ jobs:
           PR_TITLE: ${{ inputs.title != '' && inputs.title || format('🚀 Promote {0} → {1}', inputs.head-branch, inputs.base-branch) }}
           PR_BODY: ${{ steps.body.outputs.text }}
         run: |
-          gh pr create \
-            --base "$BASE_BRANCH" \
-            --head "$HEAD_BRANCH" \
-            --title "$PR_TITLE" \
-            --body "$PR_BODY"
+          if ! out=$(gh pr create --base "$BASE_BRANCH" --head "$HEAD_BRANCH" --title "$PR_TITLE" --body "$PR_BODY" 2>&1); then
+            if grep -q "already exists" <<<"$out"; then
+              echo "Opened meanwhile by someone else: $out"
+              exit 0
+            fi
+            echo "$out" >&2
+            exit 1
+          fi
+          echo "$out"
 
       - name: Refresh the open PR
         if: inputs.refresh-body && steps.check-pr.outputs.pr_exists != '0'
