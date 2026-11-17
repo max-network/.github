@@ -178,6 +178,26 @@ download, installs the same build from the npm registry (`@oven/bun-<os>-<arch>`
 instead of `oven-sh/setup-bun` in every workflow: on 2026-11-08 GitHub's release downloads
 answered 504 for over an hour, longer than any retry backs off, while npm served Bun throughout.
 
+## Version PR
+
+`.github/actions/version-pr` records a version in a JSON file of another repository as a pull
+request, for a deploy or pin that should be a reviewed, revertable line in git. Each version gets
+its own branch under `branch-prefix`; a re-run reuses it, and older open pull requests under the
+same prefix are closed as superseded, so merging a stale one cannot roll anything back. Nothing is
+opened when the base branch already records the version. It calls the REST API with the `token`
+you pass, so mint that token for the target repository's org; it works across orgs.
+
+```yaml
+- uses: max-network/.github/.github/actions/version-pr@main
+  with:
+    token: ${{ steps.target-token.outputs.token }}
+    repository: acme/deployments
+    file: versions.json
+    field: appVersion
+    version: ${{ inputs.version }}
+    branch-prefix: release/
+```
+
 ## Deploying a Worker
 
 One caller per environment, so beta and production share every step:

@@ -1,0 +1,73 @@
+name: Version PR
+description: >-
+  Records a version in a JSON file of another repository as a pull request: one branch per
+  version under a prefix, reused on a re-run, with older open pull requests under that prefix
+  closed as superseded. Merging it is the change, so a deploy or pin stays a reviewed,
+  revertable line in git. Nothing is opened when the base branch already records the version.
+
+inputs:
+  token:
+    description: "Token that can push branches and open pull requests in `repository`; mint it for that repository's org."
+    required: true
+  repository:
+    description: "owner/name of the repository holding the file."
+    required: true
+  base:
+    description: "Branch the pull request targets."
+    required: false
+    default: main
+  file:
+    description: "JSON file to change, e.g. deploy-versions.json."
+    required: true
+  field:
+    description: "Top-level key that holds the version, e.g. appVersion."
+    required: true
+  version:
+    description: "The version to record."
+    required: true
+  branch-prefix:
+    description: "Prefix for the branch, e.g. release/. Open pull requests from other branches under it are superseded."
+    required: true
+  title:
+    description: "Pull request title and commit message. Empty: the branch name."
+    required: false
+    default: ""
+  body:
+    description: "Pull request body."
+    required: false
+    default: ""
+  superseded-comment:
+    description: "Comment left on a pull request this one supersedes. Empty: a one-line default."
+    required: false
+    default: ""
+  close-superseded:
+    description: "Close older open pull requests under the prefix."
+    required: false
+    default: "true"
+
+outputs:
+  changed:
+    description: "'true' when a pull request records the version, 'false' when the base already did."
+    value: ${{ steps.run.outputs.changed }}
+  pr-url:
+    description: "The pull request, when one was opened or reused."
+    value: ${{ steps.run.outputs.pr-url }}
+
+runs:
+  using: composite
+  steps:
+    - id: run
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        REPOSITORY: ${{ inputs.repository }}
+        BASE: ${{ inputs.base }}
+        FILE: ${{ inputs.file }}
+        FIELD: ${{ inputs.field }}
+        VERSION: ${{ inputs.version }}
+        BRANCH_PREFIX: ${{ inputs.branch-prefix }}
+        TITLE: ${{ inputs.title }}
+        BODY: ${{ inputs.body }}
+        SUPERSEDED_COMMENT: ${{ inputs.superseded-comment }}
+        CLOSE_SUPERSEDED: ${{ inputs.close-superseded }}
+      run: node "$GITHUB_ACTION_PATH/version-pr.mjs"
