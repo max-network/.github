@@ -54,6 +54,19 @@ on:
         required: false
         type: number
         default: 20
+      cache-path:
+        description: >-
+          Paths restored after install and saved once the gate ran, for tools that keep a sound
+          incremental state of their own between runs (a tsbuildinfo, vitest's fsModuleCache and
+          results, a cache keyed on its inputs). Relative to the repository root. Each run saves a
+          new entry and the next one restores the newest, so the tool must decide what is still
+          valid; nothing here does. Empty, the default, caches nothing.
+        type: string
+        default: ""
+      cache-key:
+        description: "Key prefix for cache-path entries. Change it to start from an empty cache."
+        type: string
+        default: check
     secrets:
       GH_PACKAGES_TOKEN:
         description: "read:packages token for private dependencies, tried before the workflow token."
@@ -111,8 +124,25 @@ jobs:
           workflow-token: ${{ github.token }}
           working-directory: ${{ inputs.working-directory }}
 
-      - name: Gate
+      - name: Skip a tree the gate already passed
+        id: verified
         if: inputs.check != ''
+        uses: max-network/.github/.github/actions/verified-tree@main
+        with:
+          mode: lookup
+          key: npm auto ${{ inputs.node-version }} ${{ inputs.check }}${{ inputs.working-directory != '.' && format(' {0}', inputs.working-directory) || '' }}
+
+      - name: Restore the gate cache
+        if: inputs.check != '' && steps.verified.outputs.verified != 'true' && inputs.cache-path != ''
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ inputs.cache-path }}
+          key: ${{ inputs.cache-key }}-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            ${{ inputs.cache-key }}-${{ runner.os }}-
+
+      - name: Gate
+        if: inputs.check != '' && steps.verified.outputs.verified != 'true'
         env:
           STEPS: ${{ inputs.check }}
           NODE_AUTH_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN || github.token }}
@@ -123,6 +153,20 @@ jobs:
             npm run "$s"
             echo "::endgroup::"
           done
+
+      - name: Save the gate cache
+        if: inputs.check != '' && steps.verified.outputs.verified != 'true' && inputs.cache-path != '' && !cancelled()
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ inputs.cache-path }}
+          key: ${{ inputs.cache-key }}-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Record the verified tree
+        if: inputs.check != '' && steps.verified.outputs.verified != 'true'
+        uses: max-network/.github/.github/actions/verified-tree@main
+        with:
+          mode: record
+          key: npm auto ${{ inputs.node-version }} ${{ inputs.check }}${{ inputs.working-directory != '.' && format(' {0}', inputs.working-directory) || '' }}
 
       - name: Pre-deploy
         if: inputs.pre-deploy != ''
