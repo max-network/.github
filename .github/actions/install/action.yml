@@ -48,7 +48,7 @@ runs:
             echo "registry auth: $label"
             exit 0
           fi
-          if ! grep -qiE 'E401|E403|ENEEDAUTH|permission_denied|40[13] (Unauthorized|Forbidden)' "$log"; then
+          if ! grep -qiE 'E401|E403|ENEEDAUTH|permission_denied|40[13] (Unauthorized|Forbidden)| - 40[13]$' "$log"; then
             exit "$status"
           fi
           echo "::warning::The registry refused $label for this install."
