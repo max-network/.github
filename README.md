@@ -43,6 +43,22 @@ with an `.npmrc` that reads `${GITHUB_TOKEN}`, or tested under bun with a packag
 its root, such as a worker in `worker/`. The install and every step run there. The directory
 joins the verified-tree key only when it is not `.`, so existing callers keep their records.
 
+`check.yml` and `deploy-worker.yml` take `cache-path` (and `cache-key`, default `check`), the
+same inputs as Max-Health-Inc's check workflow: paths restored after the install and saved after
+the gate, for a tool that validates its own incremental state, such as vitest's `fsModuleCache`
+and its results file (which runs the slowest files first). One path per line, relative to the
+repository root:
+
+```yaml
+    with:
+      cache-path: |
+        node_modules/.vitest-cache
+        node_modules/.vite/vitest
+```
+
+Use one `cache-key` in both callers so a deploy and a pull request share the entries their
+branches can reach.
+
 On a pull request `check.yml` also checks the lockfile it installs from (`package-lock.json`
 for npm, `bun.lock` for bun, or the one the custom `install` names). It fails when the
 dependencies in `package.json` changed but that lockfile did not, and it warns about any
@@ -213,6 +229,7 @@ concurrency:
 jobs:
   deploy:
     permissions:
+      actions: read
       contents: write
       packages: read
     uses: max-network/.github/.github/workflows/deploy-worker.yml@main
@@ -228,6 +245,17 @@ The beta caller is the same on `test` with `wrangler-env: beta`, `contents: read
 `working-directory` points at a worker outside the repository root, `check` names the gate's
 package scripts (default `check`), and `pre-deploy` runs a command with the Cloudflare
 credentials before the migrations.
+
+The gate uses the same [verified tree](#verified-tree) key as `check.yml` with `runtime: npm`
+and `install: auto`, so a tree that `check.yml` or an earlier deploy already passed with the same
+scripts deploys without running them again: the push to `main` that merges the promotion pull
+request skips the gate its `test` deploy ran. Grant `actions: read` in the caller's job
+permissions; without it the lookup misses and the gate runs as before. A skipped gate writes
+nothing, so anything the deploy ships must come from `wrangler deploy` itself (its
+`build.command`) or from git, never from a file the gate built. A staging push and the
+promotion pull request it updates start at the same moment, so give both callers' jobs the same
+`concurrency` group, e.g. `gate-${{ github.event.pull_request.head.sha || github.sha }}` with
+`cancel-in-progress: false`: the second one waits for the first and then finds its record.
 
 Versions come from `@max-health-inc/config/vite/release`, which the worker lists as a dev
 dependency. The checkout keeps full history and tags, so beta deploys as a pre-release of the

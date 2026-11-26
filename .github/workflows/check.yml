@@ -34,6 +34,19 @@ on:
         description: "Fail the gate rather than hang a runner."
         type: number
         default: 10
+      cache-path:
+        description: >-
+          Paths restored after install and saved once the gate ran, for tools that keep a sound
+          incremental state of their own between runs (a tsbuildinfo, vitest's fsModuleCache and
+          results, a cache keyed on its inputs). Relative to the repository root. Each run saves a
+          new entry and the next one restores the newest, so the tool must decide what is still
+          valid; nothing here does. Empty, the default, caches nothing.
+        type: string
+        default: ""
+      cache-key:
+        description: "Key prefix for cache-path entries. Change it to start from an empty cache."
+        type: string
+        default: check
     secrets:
       GH_PACKAGES_TOKEN:
         description: "Classic PAT tried first for private dependencies. Optional; a caller in another org passes it by name."
@@ -130,6 +143,15 @@ jobs:
           workflow-token: ${{ github.token }}
           working-directory: ${{ inputs.working-directory }}
 
+      - name: Restore the gate cache
+        if: steps.verified.outputs.verified != 'true' && inputs.cache-path != ''
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ inputs.cache-path }}
+          key: ${{ inputs.cache-key }}-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            ${{ inputs.cache-key }}-${{ runner.os }}-
+
       - name: Run gate
         if: steps.verified.outputs.verified != 'true'
         working-directory: ${{ inputs.working-directory }}
@@ -143,6 +165,13 @@ jobs:
             "$RUNNER_CMD" run "$s"
             echo "::endgroup::"
           done
+
+      - name: Save the gate cache
+        if: steps.verified.outputs.verified != 'true' && inputs.cache-path != '' && !cancelled()
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ inputs.cache-path }}
+          key: ${{ inputs.cache-key }}-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Record the verified tree
         if: steps.verified.outputs.verified != 'true'
